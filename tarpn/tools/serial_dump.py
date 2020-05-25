@@ -19,4 +19,3 @@ if __name__ == "__main__":
             d = ser.read(100)
             if len(d) > 0:
                 print(hexdump.hexdump(d))
-            
