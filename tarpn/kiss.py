@@ -1,5 +1,6 @@
-from collections import namedtuple
+from typing import NamedTuple
 from enum import IntEnum, unique
+from functools import partial
 
 import asyncio
 
@@ -33,7 +34,8 @@ class KISSCommand(IntEnum):
 
 
 class KISSReader(asyncio.Protocol):
-    def __init__(self, check_crc=False):
+    def __init__(self, frame_consumer, check_crc=False):
+        self.frame_consumer = frame_consumer
         self.check_crc = check_crc
         self.transport = None
         self.buf = bytes()
@@ -51,8 +53,8 @@ class KISSReader(asyncio.Protocol):
         for b in data:
             if b == KISSProtocol.FEND:
                 if self.in_frame:
-                    frame = parse_kiss_frame(self.buf, self.check_crc)
-                    print(f"Got frame: {frame}")
+                    frame = decode_kiss_frame(self.buf, self.check_crc)
+                    self.frame_consumer(frame)
                     self.msgs_recvd += 1
                     self.buf = bytes()
                 else:
@@ -67,10 +69,62 @@ class KISSReader(asyncio.Protocol):
         print('Reader closed')
 
 
-def parse_kiss_frame(data, check_crc=False):
+class KISSWriter(asyncio.Protocol):
+
+    def connection_made(self, transport):
+        """Store the serial transport and schedule the task to send data.
+        """
+        self.transport = transport
+        print('Writer connection created')
+        print('Writer.send() scheduled')
+
+    def connection_lost(self, exc):
+        print('Writer closed')
+
+    def send(self, kiss_frame):
+        asyncio.ensure_future(self.send())
+
+
+    async def do_send(self, data):
+        self.transport.serial.write(data)
+
+
+class KISSFrame(NamedTuple):
+    port: int
+    command: KISSCommand
+    data: bytes
+
+
+def encode_kiss_frame(frame: KISSFrame, include_crc=False):
+    """
+    Given a KISSFrame, encode into bytes for sending over an asynchronous transport
+    :param frame:
+    :param include_crc:
+    :return:
+    """
+    crc = 0
+    out = bytes([KISSProtocol.FEND])
+    command_byte = ((frame.port << 4) & 0xF0) | (frame.command & 0x0F);
+    out += int.to_bytes(command_byte, 1, 'big')
+    for b in frame.data:
+        crc ^= b
+        if b == KISSProtocol.FEND:
+            out += bytes([KISSProtocol.FESC, KISSProtocol.TFEND])
+        elif b == KISSProtocol.FESC:
+            out += bytes([KISSProtocol.FESC, KISSProtocol.TFESC])
+        else:
+            out += bytes([b])
+    if include_crc:
+        out += bytes([crc & 0xFF])
+    out += bytes([KISSProtocol.FEND])
+    return out
+
+
+def decode_kiss_frame(data, check_crc=False):
     """
     Given a full KISS frame, decode the port and command. Also un-escape the data
     :param data:
+    :param check_crc:
     :return:
     """
     crc = 0
@@ -106,12 +160,11 @@ def parse_kiss_frame(data, check_crc=False):
         return KISSFrame(hdlc_port, kiss_command, decoded)
 
 
-KISSFrame = namedtuple('KISSFrame', ['port', 'command', 'data'])
-
-
 if __name__ == "__main__":
-    reader = KISSReader()
+    def printer(frame):
+        print(f"Got frame {frame}")
+
+    reader = KISSReader(printer, check_crc=False)
     reader.data_received(bytes([KISSProtocol.FEND, KISSProtocol.FEND, KISSProtocol.FEND, KISSCommand.Data]))
     reader.data_received("TEST".encode())
     reader.data_received(bytes([KISSProtocol.FEND]))
-
