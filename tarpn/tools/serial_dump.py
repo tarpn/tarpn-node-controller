@@ -15,5 +15,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with serial.Serial(args.port, args.baud, timeout=1) as ser:
-        d = ser.read(32)
-        print(hexdump.dump(d))
+        while True:
+            d = ser.read(100)
+            if len(d) > 0:
+                print(hexdump.hexdump(d))
+            
