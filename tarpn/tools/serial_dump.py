@@ -1,10 +1,10 @@
 import argparse
-import sys
 
 import hexdump
 import serial
 
-if __name__ == "__main__":
+
+def main():
     """
     A utility to read from a serial port and print to stdout as hex
     """

@@ -1,12 +1,13 @@
-from typing import NamedTuple
+from typing import NamedTuple, Callable
 from enum import IntEnum, unique
-from functools import partial
 
 import asyncio
 
+from tarpn.frame import Frame
+
 
 @unique
-class KISSProtocol(IntEnum):
+class KISSMagic(IntEnum):
     FEND = 0xC0
     FESC = 0xDB
     TFEND = 0xDC
@@ -33,99 +34,135 @@ class KISSCommand(IntEnum):
         return KISSCommand.Unknown
 
 
-class KISSReader(asyncio.Protocol):
-    def __init__(self, frame_consumer, check_crc=False):
-        self.frame_consumer = frame_consumer
+class KISSFrame(NamedTuple):
+    hdlc_port: int
+    command: KISSCommand
+    data: bytes
+
+
+class KISSProtocol(asyncio.Protocol):
+    def __init__(self,
+                 loop: asyncio.AbstractEventLoop,
+                 inbound: asyncio.Queue,
+                 tnc_port: int,
+                 check_crc=False):
+        self.loop = loop
+        self.inbound = inbound
+        self.outbound = asyncio.Queue()
         self.check_crc = check_crc
+        self.tnc_port = tnc_port
         self.transport = None
-        self.buf = bytes()
+        self._buffer = bytearray()
         self.msgs_recvd = 0
         self.in_frame = False
 
     def connection_made(self, transport):
         self.transport = transport
-        print('Reader connection created')
+        self.loop.create_task(self.start())
 
     def data_received(self, data):
-        """
-        Collect data until a whole frame has been read (FEND to FEND)
+        """Collect data until a whole frame has been read (FEND to FEND) and then emit a Frame
         """
         for b in data:
-            if b == KISSProtocol.FEND:
+            if b == KISSMagic.FEND:
                 if self.in_frame:
-                    frame = decode_kiss_frame(self.buf, self.check_crc)
-                    self.frame_consumer(frame)
+                    frame = decode_kiss_frame(self._buffer, self.check_crc)
+                    if frame.command == KISSCommand.Data:
+                        asyncio.ensure_future(self.inbound.put(
+                            Frame(self.tnc_port, frame.data, self._data_callback(frame.hdlc_port))))
+                    elif frame.command == KISSCommand.SetHardware:
+                        self.on_hardware(frame)
+                    else:
+                        print(f"Ignoring KISS frame {frame}")
                     self.msgs_recvd += 1
-                    self.buf = bytes()
+                    self._buffer.clear()
+                    self.in_frame = False
                 else:
                     # keep consuming sequential FENDs
                     continue
             else:
                 if not self.in_frame:
                     self.in_frame = True
-                self.buf += b.to_bytes(1, 'big')
+                self._buffer.append(b)
+
+    def _data_callback(self, hdlc_port) -> Callable[[bytes], None]:
+        """Callback for sending data out the same way it came. Used in Frame objects
+        """
+        def inner(data):
+            self.send(KISSFrame(hdlc_port, KISSCommand.Data, data))
+        return inner
+
+    def send(self, frame: KISSFrame):
+        """Accept a KISS frame and enqueue it for writing to the serial transport
+        """
+        data = encode_kiss_frame(frame, False)
+        print(f"Scheduling {data}")
+        asyncio.ensure_future(self.write(data))
+        #asyncio.ensure_future(self.outbound.put(frame))
+
+    async def write(self, data):
+        self.transport.serial.write(data)
+
+    async def start(self):
+        while True:
+            frame = await self.outbound.get()
+            if frame is None:
+                break
+            data = encode_kiss_frame(frame, False)
+            print(f"Sending {data}")
+            self.transport.serial.write(data)
+            self.outbound.task_done()
 
     def connection_lost(self, exc):
         print('Reader closed')
 
+    def should_check_crc(self):
+        return self.check_crc
 
-class KISSWriter(asyncio.Protocol):
-
-    def connection_made(self, transport):
-        """Store the serial transport and schedule the task to send data.
+    def on_hardware(self, frame: KISSFrame):
+        """Callback for when we receive a SetHardware query
         """
-        self.transport = transport
-        print('Writer connection created')
-        print('Writer.send() scheduled')
+        if frame.command != KISSCommand.SetHardware:
+            return
+        hw_req = frame.data.decode("ascii").strip()
+        if hw_req == "TNC:":
+            hw_resp = "TNC:tarpn 0.1"
+        elif hw_req == "MODEM:":
+            hw_resp = "MODEM:tarpn"
+        elif hw_req == "MODEML:":
+            hw_resp = "MODEML:tarpn"
+        else:
+            # TODO what hardware strings are expected?
+            hw_resp = ""
 
-    def connection_lost(self, exc):
-        print('Writer closed')
-
-    def send(self, kiss_frame):
-        asyncio.ensure_future(self.send())
-
-
-    async def do_send(self, data):
-        self.transport.serial.write(data)
-
-
-class KISSFrame(NamedTuple):
-    port: int
-    command: KISSCommand
-    data: bytes
+        resp = KISSFrame(frame.hdlc_port, KISSCommand.SetHardware, hw_resp.encode("ascii"))
+        self.send(resp)
 
 
 def encode_kiss_frame(frame: KISSFrame, include_crc=False):
-    """
-    Given a KISSFrame, encode into bytes for sending over an asynchronous transport
-    :param frame:
-    :param include_crc:
-    :return:
+    """Given a KISSFrame, encode into bytes for sending over an asynchronous transport
     """
     crc = 0
-    out = bytes([KISSProtocol.FEND])
-    command_byte = ((frame.port << 4) & 0xF0) | (frame.command & 0x0F);
+    out = bytes([KISSMagic.FEND])
+    command_byte = ((frame.hdlc_port << 4) & 0xF0) | (frame.command & 0x0F);
     out += int.to_bytes(command_byte, 1, 'big')
     for b in frame.data:
         crc ^= b
-        if b == KISSProtocol.FEND:
-            out += bytes([KISSProtocol.FESC, KISSProtocol.TFEND])
-        elif b == KISSProtocol.FESC:
-            out += bytes([KISSProtocol.FESC, KISSProtocol.TFESC])
+        if b == KISSMagic.FEND:
+            out += bytes([KISSMagic.FESC, KISSMagic.TFEND])
+        elif b == KISSMagic.FESC:
+            out += bytes([KISSMagic.FESC, KISSMagic.TFESC])
         else:
             out += bytes([b])
     if include_crc:
         out += bytes([crc & 0xFF])
-    out += bytes([KISSProtocol.FEND])
+    out += bytes([KISSMagic.FEND])
     return out
 
 
 def decode_kiss_frame(data, check_crc=False):
-    """
-    Given a full KISS frame, decode the port and command. Also un-escape the data
-    :param data:
-    :param check_crc:
-    :return:
+    """Given a KISS frame (excluding the frame delimiters), decode the port and command.
+    Also un-escape the data
     """
     crc = 0
     first_byte = data[0]
@@ -135,14 +172,14 @@ def decode_kiss_frame(data, check_crc=False):
     in_escape = False
     decoded = bytes()
     for b in data[1:]:
-        if b == KISSProtocol.FESC:
+        if b == KISSMagic.FESC:
             in_escape = True
         else:
             if in_escape:
-                if b == KISSProtocol.TFEND:
-                    decoded += KISSProtocol.FEND.to_bytes(1, 'big')
-                elif b == KISSProtocol.TFESC:
-                    decoded += KISSProtocol.FESC.to_bytes(1, 'big')
+                if b == KISSMagic.TFEND:
+                    decoded += KISSMagic.FEND.to_bytes(1, 'big')
+                elif b == KISSMagic.TFESC:
+                    decoded += KISSMagic.FESC.to_bytes(1, 'big')
                 in_escape = False
             decoded += b.to_bytes(1, 'big')
 
@@ -158,13 +195,3 @@ def decode_kiss_frame(data, check_crc=False):
             return None
     else:
         return KISSFrame(hdlc_port, kiss_command, decoded)
-
-
-if __name__ == "__main__":
-    def printer(frame):
-        print(f"Got frame {frame}")
-
-    reader = KISSReader(printer, check_crc=False)
-    reader.data_received(bytes([KISSProtocol.FEND, KISSProtocol.FEND, KISSProtocol.FEND, KISSCommand.Data]))
-    reader.data_received("TEST".encode())
-    reader.data_received(bytes([KISSProtocol.FEND]))

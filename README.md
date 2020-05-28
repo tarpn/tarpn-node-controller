@@ -1,14 +1,26 @@
-# Setup
+# TARPN Node Controller
+
+TODO describe this
+
+# Development
+
+## Local setup
 
 Create a virtualenv, activate, and install deps (using Python 3)
 
 ```
 python3 -m venv venv
 source venv/bin/activate
-pip install -r req.txt
+python setup.py develop
 ```
 
-# Docker setup
+Now some "tarpn-" scripts are in your path. E.g.,
+
+```
+tarpn-packet-dump /tmp/vmodem0 9600
+```
+
+## Docker setup
 
 ```
 docker build . -t tarpn
