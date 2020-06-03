@@ -6,4 +6,5 @@ from typing import Callable
 class DataLinkFrame:
     port: int
     data: bytes
+    hldc_port: int
     write_callback: Callable[[bytes], None]

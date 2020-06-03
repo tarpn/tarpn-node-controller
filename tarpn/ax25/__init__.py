@@ -256,6 +256,13 @@ class InternalInfo(AX25Packet):
         return cls(bytes(), AX25Call(), AX25Call(), [], 0x00, protocol, info)
 
 
+@dataclass
+class DummyPacket(AX25Packet):
+    @classmethod
+    def dummy(cls, dest: AX25Call, source: AX25Call):
+        return cls(bytes(), dest, source, [], 0x00)
+
+
 def parse_ax25_call(byte_iter: Iterator[int]):
     call = ""
     for i in range(6):

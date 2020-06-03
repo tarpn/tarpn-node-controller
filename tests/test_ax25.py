@@ -1,7 +1,10 @@
 import asyncio
 import unittest
+from typing import cast
 
-from tarpn.ax25 import decode_ax25_packet, L3Protocol, AX25Call, SupervisoryType, SFrame, SupervisoryCommand
+from tarpn.ax25 import decode_ax25_packet, L3Protocol, AX25Call, SupervisoryType, SFrame, SupervisoryCommand, \
+    AX25Packet, DummyPacket, UFrame, UnnumberedType
+from tarpn.ax25.sm import AX25StateEvent, AX25EventType, AX25StateType
 from tarpn.kiss import decode_kiss_frame
 from tarpn.test import AX25Impl
 
@@ -34,7 +37,16 @@ class TestAX25(unittest.TestCase):
         assert s_frame == packet
 
     def test_connect(self):
-        queue = asyncio.Queue()
-        ax25 = AX25Impl(queue)
+        in_queue = asyncio.Queue()
+        out_queue = asyncio.Queue()
+        ax25 = AX25Impl(in_queue, out_queue)
 
+        dummy = DummyPacket.dummy(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
+        dl_connect = AX25StateEvent(AX25Call("K4DBZ", 2), dummy, AX25EventType.DL_CONNECT)
+        ax25.state_machine.handle_internal_event(dl_connect)
 
+        state = ax25.state_machine._sessions["K4DBZ-1"]
+        assert state.current_state == AX25StateType.AwaitingConnection
+
+        packet = cast(UFrame, asyncio.get_event_loop().run_until_complete(out_queue.get()))
+        assert packet.u_type == UnnumberedType.SABM

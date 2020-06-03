@@ -44,11 +44,12 @@ class KISSProtocol(asyncio.Protocol):
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
                  inbound: asyncio.Queue,
+                 outbound: asyncio.Queue,
                  tnc_port: int,
                  check_crc=False):
         self.loop = loop
         self.inbound = inbound
-        self.outbound = asyncio.Queue()
+        self.outbound = outbound
         self.check_crc = check_crc
         self.tnc_port = tnc_port
         self.transport = None
@@ -69,7 +70,8 @@ class KISSProtocol(asyncio.Protocol):
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
                     if frame.command == KISSCommand.Data:
                         asyncio.ensure_future(self.inbound.put(
-                            DataLinkFrame(self.tnc_port, frame.data, self._data_callback(frame.hdlc_port))))
+                            DataLinkFrame(self.tnc_port, frame.data, frame.hdlc_port,
+                                          self._data_callback(frame.hdlc_port))))
                     elif frame.command == KISSCommand.SetHardware:
                         self.on_hardware(frame)
                     else:
@@ -192,6 +194,7 @@ def decode_kiss_frame(data, check_crc=False):
         if kiss_crc == crc:
             return KISSFrame(hdlc_port, kiss_command, decoded)
         else:
+            print("CRC failure")
             return None
     else:
         return KISSFrame(hdlc_port, kiss_command, decoded)

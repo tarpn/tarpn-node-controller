@@ -96,7 +96,6 @@ class AX25StateEvent:
         return cls(dest, InternalInfo.internal_info(protocol, info), AX25EventType.DL_DATA)
 
 
-
 @dataclass
 class AX25State:
     """Represents the internal state of an AX.25 connection. This is used in conjunction with
@@ -217,13 +216,6 @@ class AX25State:
                                 self.get_recv_state(), True)
             ax25.write_packet(rr)
             self.ack_pending = False
-
-
-
-
-#
-# State helper methods
-#
 
 
 def check_ui(ui_frame: UIFrame, ax25: AX25):
@@ -368,6 +360,94 @@ def disconnected_handler(
     else:
         print(f"Ignoring {event}")
         return AX25StateType.Disconnected
+
+
+def awaiting_connection_handler(
+        state: AX25State,
+        event: AX25StateEvent,
+        ax25: AX25) -> AX25StateType:
+    """Handle packets when we are in a awaiting connection state
+    """
+    assert state.current_state == AX25StateType.AwaitingConnection
+    print(f"in awaiting connection state, got: {event}")
+    if event.event_type == AX25EventType.DL_CONNECT:
+        # TODO discard queue
+        state.layer_3 = True
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_SABM:
+        u_frame = cast(UFrame, event.packet)
+        ua = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                            UnnumberedType.UA, u_frame.poll_final)
+        ax25.write_packet(ua)
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_DISC:
+        u_frame = cast(UFrame, event.packet)
+        dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                            UnnumberedType.DM, u_frame.poll_final)
+        ax25.write_packet(dm)
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.DL_DATA:
+        # TODO if layer 3
+        pending = cast(InternalInfo, event.packet)
+        state.push_iframe(pending)
+        return AX25StateType.AwaitingConnection
+    elif not state.pending_frames.empty():
+        pending = cast(InternalInfo, state.pending_frames.get())
+        asyncio.ensure_future(delay_outgoing_data(state, pending))
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_UI:
+        ui_frame = cast(UIFrame, event.packet)
+        check_ui(ui_frame, ax25)
+        if ui_frame.poll_final:
+            dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                                UnnumberedType.DM, True)
+            ax25.write_packet(dm)
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.DL_UNIT_DATA:
+        pending = cast(InternalInfo, event.packet)
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                              True, pending.protocol, pending.info)
+        ax25.write_packet(ui)
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_DM:
+        u_frame = cast(UFrame, event.packet)
+        if u_frame.poll_final:
+            # TODO if layer 3
+            ax25.dl_connect(state.remote_call, state.local_call)
+            state.reset()
+            select_t1_value(state)
+            return AX25StateType.Connected
+        else:
+            ax25.dl_error(state.remote_call, state.local_call, "D")
+            return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_SABME:
+        dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                            UnnumberedType.DM, True)
+        ax25.write_packet(dm)
+        ax25.dl_disconnect(state.remote_call, state.local_call)
+        return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.T1_EXPIRE:
+        if state.rc < 4: # TODO config this
+            state.rc += 1
+            sabm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                                  UnnumberedType.SABM, True)
+            ax25.write_packet(sabm)
+            select_t1_value(state)
+            state.t1.start()
+            return AX25StateType.AwaitingConnection
+        else:
+            ax25.dl_error(state.remote_call, state.local_call, "G")
+            ax25.dl_disconnect(state.remote_call, state.local_call)
+            return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.AX25_FRMR:
+        state.srt = 1000
+        state.t1.delay = state.srt * 2
+        establish_data_link(state, ax25)
+        state.layer_3 = True
+        return AX25StateType.AwaitingConnection
+    else:
+        print(f"Ignoring {event}")
+        return AX25StateType.AwaitingConnection
 
 
 def connected_handler(
@@ -527,8 +607,10 @@ class AX25StateMachine:
         self._sessions: Dict[str, AX25State] = {}
         self._handlers = {
             AX25StateType.Disconnected: disconnected_handler,
-            AX25StateType.Connected: connected_handler
+            AX25StateType.Connected: connected_handler,
+            AX25StateType.AwaitingConnection: awaiting_connection_handler
         }
+
 
     def handle_packet(self, packet: AX25Packet):
         state = self._sessions.get(str(packet.source))
@@ -545,6 +627,10 @@ class AX25StateMachine:
     def handle_internal_event(self, event: AX25StateEvent):
         state = self._sessions.get(str(event.packet.source))
         if not state:
-            raise RuntimeError("Got a timer callback for a non-existent session")
+            state = AX25State.create(event.packet.source, event.packet.dest, self.handle_internal_event)
+            self._sessions[str(event.packet.source)] = state
+        handler = self._handlers[state.current_state]
+        if handler is None:
+            raise RuntimeError(f"No handler for {handler}")
         new_state = self._handlers[state.current_state](state, event, self._ax25)
         state.current_state = new_state
