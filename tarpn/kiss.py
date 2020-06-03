@@ -3,7 +3,7 @@ from enum import IntEnum, unique
 
 import asyncio
 
-from tarpn.frame import Frame
+from tarpn.frame import DataLinkFrame
 
 
 @unique
@@ -69,7 +69,7 @@ class KISSProtocol(asyncio.Protocol):
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
                     if frame.command == KISSCommand.Data:
                         asyncio.ensure_future(self.inbound.put(
-                            Frame(self.tnc_port, frame.data, self._data_callback(frame.hdlc_port))))
+                            DataLinkFrame(self.tnc_port, frame.data, self._data_callback(frame.hdlc_port))))
                     elif frame.command == KISSCommand.SetHardware:
                         self.on_hardware(frame)
                     else:

@@ -1,7 +1,9 @@
-from typing import Callable, NamedTuple
+from dataclasses import dataclass
+from typing import Callable
 
 
-class Frame(NamedTuple):
+@dataclass
+class DataLinkFrame:
     port: int
     data: bytes
     write_callback: Callable[[bytes], None]

@@ -1,3 +1,7 @@
 venv
 
 /tarpn/test.py
+
+*.egg-info
+
+__pycache__

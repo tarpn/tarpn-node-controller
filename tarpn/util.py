@@ -16,10 +16,9 @@ class Timer:
         self._started = 0
 
     def start(self):
-        if not self._task:
-            self._task = asyncio.ensure_future(self._run())
-        else:
-            raise RuntimeError("Cannot start timer since it's already running")
+        if self._task:
+            self._task.cancel()
+        self._task = asyncio.ensure_future(self._run())
 
     async def _run(self):
         self._started = time.time()
@@ -31,6 +30,9 @@ class Timer:
         if self._task:
             self._task.cancel()
             self._task = None
+
+    def running(self):
+        return self._task is not None
 
     def remaining(self):
         if self._task:

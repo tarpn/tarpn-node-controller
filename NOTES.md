@@ -21,3 +21,19 @@ Send some data to the _other_ end of the pair
 ```
 cat README.md /tmp/vmodem1
 ```
+
+# Structure
+
+Data Link Layer is AX.25 plus a byte stream such as KISS+Serial or TCP.
+
+Each Data Link is a pair of call signs and a port where they communicate. 
+
+
+Data Links that get NET/ROM pid will send their DL_DATA and DL_UNIT_DATA messages to the NET/ROM layer
+
+NET/ROM packets include a source and destination callsign
+
+
+AARONL -> DAVID
+KN4ORB-2 -> K4DBZ-2 on 2m (port 1)
+KN4ORB-2 -> K4DBZ-2 on 6m as well? (port 2)

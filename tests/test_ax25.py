@@ -1,7 +1,9 @@
+import asyncio
 import unittest
 
-from tarpn.ax25 import decode_ax25_packet, Protocol, AX25Call, SupervisoryType, SFrame, SupervisoryCommand
+from tarpn.ax25 import decode_ax25_packet, L3Protocol, AX25Call, SupervisoryType, SFrame, SupervisoryCommand
 from tarpn.kiss import decode_kiss_frame
+from tarpn.test import AX25Impl
 
 
 class TestAX25(unittest.TestCase):
@@ -21,12 +23,18 @@ class TestAX25(unittest.TestCase):
         frame = decode_kiss_frame(data)
         packet = decode_ax25_packet(frame.data)
         print(packet)
-        assert packet.protocol == Protocol.NetRom
+        assert packet.protocol == L3Protocol.NetRom
         assert packet.dest == AX25Call("K4DBZ", 2)
         assert packet.source == AX25Call("K4DBZ", 1)
 
     def test_s_frame(self):
-        s_frame = SFrame.build(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1), [],
-                               SupervisoryCommand.Command, SupervisoryType.RR, 5, True)
+        s_frame = SFrame.s_frame(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1), [],
+                                 SupervisoryCommand.Command, SupervisoryType.RR, 5, True)
         packet = decode_ax25_packet(s_frame.buffer)
         assert s_frame == packet
+
+    def test_connect(self):
+        queue = asyncio.Queue()
+        ax25 = AX25Impl(queue)
+
+
