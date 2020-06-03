@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, cast, Dict
 
-from asyncio import Task, Future
+from asyncio import Future
 
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
-    L3Protocol, InternalInfo, SupervisoryCommand, AX25
+    L3Protocol, InternalInfo, SupervisoryCommand, AX25, DummyPacket
 from tarpn.util import Timer
 
 
@@ -94,6 +94,16 @@ class AX25StateEvent:
     @classmethod
     def dl_data(cls, dest: AX25Call, protocol: L3Protocol, info: bytes):
         return cls(dest, InternalInfo.internal_info(protocol, info), AX25EventType.DL_DATA)
+
+    @classmethod
+    def dl_connect(cls, dest: AX25Call, source: AX25Call):
+        dummy = DummyPacket.dummy(dest, source)
+        return cls(dest, dummy, AX25EventType.DL_CONNECT)
+
+    @classmethod
+    def dl_disconnect(cls, dest: AX25Call, source: AX25Call):
+        dummy = DummyPacket.dummy(dest, source)
+        return cls(dest, dummy, AX25EventType.DL_DISCONNECT)
 
 
 @dataclass
@@ -625,10 +635,9 @@ class AX25StateMachine:
         state.current_state = new_state
 
     def handle_internal_event(self, event: AX25StateEvent):
-        state = self._sessions.get(str(event.packet.source))
+        state = self._sessions.get(str(event.remote_call))
         if not state:
-            state = AX25State.create(event.packet.source, event.packet.dest, self.handle_internal_event)
-            self._sessions[str(event.packet.source)] = state
+            raise RuntimeError(f"No session for timer event {event}")
         handler = self._handlers[state.current_state]
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")

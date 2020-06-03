@@ -43,8 +43,8 @@ class KISSFrame(NamedTuple):
 class KISSProtocol(asyncio.Protocol):
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
-                 inbound: asyncio.Queue,
-                 outbound: asyncio.Queue,
+                 inbound: asyncio.Queue,    # DataLinkFrame
+                 outbound: asyncio.Queue,   # DataLinkFrame
                  tnc_port: int,
                  check_crc=False):
         self.loop = loop
@@ -91,28 +91,25 @@ class KISSProtocol(asyncio.Protocol):
         """Callback for sending data out the same way it came. Used in Frame objects
         """
         def inner(data):
-            self.send(KISSFrame(hdlc_port, KISSCommand.Data, data))
+            self.write(KISSFrame(hdlc_port, KISSCommand.Data, data))
         return inner
 
-    def send(self, frame: KISSFrame):
+    def write(self, frame: KISSFrame):
         """Accept a KISS frame and enqueue it for writing to the serial transport
         """
         data = encode_kiss_frame(frame, False)
         print(f"Scheduling {data}")
-        asyncio.ensure_future(self.write(data))
-        #asyncio.ensure_future(self.outbound.put(frame))
-
-    async def write(self, data):
-        self.transport.serial.write(data)
+        asyncio.ensure_future(self.outbound.put(data))
 
     async def start(self):
         while True:
-            frame = await self.outbound.get()
+            frame: DataLinkFrame = await self.outbound.get()
             if frame is None:
                 break
-            data = encode_kiss_frame(frame, False)
-            print(f"Sending {data}")
-            self.transport.serial.write(data)
+            kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
+            kiss_data = encode_kiss_frame(kiss_frame, False)
+            print(f"Sending {kiss_data}")
+            self.transport.serial.write(kiss_data)
             self.outbound.task_done()
 
     def connection_lost(self, exc):
@@ -138,7 +135,7 @@ class KISSProtocol(asyncio.Protocol):
             hw_resp = ""
 
         resp = KISSFrame(frame.hdlc_port, KISSCommand.SetHardware, hw_resp.encode("ascii"))
-        self.send(resp)
+        self.write(resp)
 
 
 def encode_kiss_frame(frame: KISSFrame, include_crc=False):

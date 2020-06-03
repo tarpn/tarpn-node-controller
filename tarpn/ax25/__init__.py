@@ -14,6 +14,9 @@ class AX25Call:
     def __repr__(self):
         return f"{self.callsign}-{self.ssid}"
 
+    def __hash__(self):
+        return repr(self).__hash__()
+
     def clear_flags(self):
         self.rr = 0
         self.c_flag = False

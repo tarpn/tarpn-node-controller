@@ -41,12 +41,11 @@ class TestAX25(unittest.TestCase):
         out_queue = asyncio.Queue()
         ax25 = AX25Impl(in_queue, out_queue)
 
-        dummy = DummyPacket.dummy(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
-        dl_connect = AX25StateEvent(AX25Call("K4DBZ", 2), dummy, AX25EventType.DL_CONNECT)
+        dl_connect = AX25StateEvent.dl_connect(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
         ax25.state_machine.handle_internal_event(dl_connect)
 
         state = ax25.state_machine._sessions["K4DBZ-1"]
         assert state.current_state == AX25StateType.AwaitingConnection
 
-        packet = cast(UFrame, asyncio.get_event_loop().run_until_complete(out_queue.get()))
-        assert packet.u_type == UnnumberedType.SABM
+        frame = cast(UFrame, asyncio.get_event_loop().run_until_complete(out_queue.get()))
+        assert frame.packet.u_type == UnnumberedType.SABM

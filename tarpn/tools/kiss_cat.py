@@ -12,7 +12,7 @@ async def cat(path, protocol):
         data = fp.read()
 
         frame = KISSFrame(0, KISSCommand.Data, data)
-        protocol.send(frame)
+        protocol.write(frame)
 
 
 async def async_main():
