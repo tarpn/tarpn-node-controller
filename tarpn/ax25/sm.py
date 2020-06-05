@@ -5,7 +5,7 @@ import asyncio
 from asyncio.queues import Queue
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, cast, Dict
+from typing import Callable, cast, Dict, List
 
 from asyncio import Future
 
@@ -136,6 +136,7 @@ class AX25State:
     rc: int = 0
     ack_pending: bool = False
     pending_frames: Queue = Queue()
+    sent_frames: Dict[int, IFrame] = field(default={})
     srt: int = 1000
     ack_timer: Future = None
     reject_exception: bool = False
@@ -179,7 +180,7 @@ class AX25State:
             self.pending_frames.get()
             self.pending_frames.task_done()
 
-    def push_iframe(self, i_frame):
+    def push_iframe(self, i_frame: InternalInfo):
         self.pending_frames.put(i_frame)
 
     def get_send_state(self):
@@ -299,6 +300,15 @@ def nr_error_recovery(state: AX25State, ax25: AX25):
     ax25.dl_error(state.remote_call, state.local_call, "J")
     establish_data_link(state, ax25)
     state.layer_3 = False
+
+
+def invoke_retransmission(state: AX25State, ax25: AX25):
+    x = state.get_send_state()
+    vs = state.get_recv_state()
+    while vs != x:
+        old_frame = state.sent_frames[vs]
+        state.push_iframe(InternalInfo.internal_info(old_frame.protocol, old_frame.info))
+        vs += 1
 
 
 def disconnected_handler(
@@ -481,8 +491,8 @@ def connected_handler(
         state.t1.start()
         return AX25StateType.AwaitingRelease
     elif event.event_type == AX25EventType.DL_DATA:
-        internal_info = cast(InternalInfo, event.packet)
-        state.push_iframe(internal_info)
+        pending = cast(InternalInfo, event.packet)
+        state.push_iframe(pending)
         return AX25StateType.Connected
     elif not state.pending_frames.empty():
         pending = cast(InternalInfo, state.pending_frames.get())
@@ -492,7 +502,7 @@ def connected_handler(
         i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
                                  state.get_send_state(), state.get_recv_state(), pending.protocol, pending.info)
         ax25.write_packet(i_frame)
-        # TODO store sent iframe?
+        state.sent_frames[state.get_send_state()] = i_frame
         state.vs += 1
         state.ack_pending = False
         if state.t1.running():
@@ -606,6 +616,196 @@ def connected_handler(
         return AX25StateType.Connected
 
 
+def timer_recovery_handler(
+        state: AX25State,
+        event: AX25StateEvent,
+        ax25: AX25) -> AX25StateType:
+    assert state.current_state == AX25StateType.TimerRecovery
+    print(f"in timer recovery state, got: {event}")
+    if event.event_type == AX25EventType.DL_CONNECT:
+        state.clear_pending_iframes()
+        establish_data_link(state, ax25)
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.DL_DISCONNECT:
+        state.clear_pending_iframes()
+        state.rc = 0
+        disc = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                              UnnumberedType.DISC, True)
+        ax25.write_packet(disc)
+        state.t3.cancel()
+        state.t1.start()
+        return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.DL_DATA:
+        pending = cast(InternalInfo, event.packet)
+        state.push_iframe(pending)
+        return AX25StateType.TimerRecovery
+    elif not state.pending_frames.empty():
+        pending = cast(InternalInfo, state.pending_frames.get())
+        if state.window_exceeded():
+            asyncio.ensure_future(delay_outgoing_data(state, pending))
+            state.pending_frames.task_done()
+        else:
+            i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
+                                     state.get_recv_state(), state.get_send_state(), pending.protocol, pending.info)
+            ax25.write_packet(i_frame)
+            state.sent_frames[state.get_send_state()] = i_frame
+            state.inc_send_state()
+            state.ack_pending = False
+            if not state.t1.running():
+                state.t3.cancel()
+                state.t1.start()
+            state.pending_frames.task_done()
+        return AX25StateType.TimerRecovery
+    elif event.event_type == AX25EventType.T1_EXPIRE:
+        if state.rc < 4:
+            state.rc += 1
+            transmit_enquiry(state, ax25)
+            return AX25StateType.TimerRecovery
+        else:
+            print("l2 retries exceeded, disconnecting")
+            if state.get_ack_state() == state.get_send_state():
+                ax25.dl_error(state.remote_call, state.local_call, "U")
+            else:
+                ax25.dl_error(state.remote_call, state.local_call, "I")
+            state.internal_event_cb(AX25StateEvent.dl_disconnect(state.remote_call, state.local_call))
+            state.clear_pending_iframes()
+            dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                                UnnumberedType.DM, True)
+            ax25.write_packet(dm)
+            return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.AX25_SABM:
+        u_frame = cast(UFrame, event.packet)
+        ua = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                            UnnumberedType.UA, u_frame.poll_final)
+        ax25.write_packet(ua)
+        ax25.dl_error(state.remote_call, state.local_call, "F")
+        if not state.get_send_state() == state.get_ack_state():
+            state.clear_pending_iframes()
+            ax25.dl_connect(state.remote_call, state.local_call)
+        state.reset()
+        state.t3.start()
+        return AX25StateType.Connected
+    elif event.event_type == AX25EventType.AX25_RNR:
+        # TODO Set peer busy
+        pass
+    elif event.event_type == AX25EventType.AX25_RR:
+        # TODO Set peer clear
+        s_frame = cast(SFrame, event.packet)
+        if s_frame.get_command() == SupervisoryCommand.Response and s_frame.poll_final:
+            """
+            Check if N(R) (received seq) is leq the V(S) (send seq) and if
+            the V(A) (ack'd seq) is leq N(R) (received seq).
+            
+            N(S) is the senders seq number
+            N(R) is the receivers next expected seq number
+            V(A) is the last acknowledged seq
+            V(S) is the next send seq
+            V(R) is the next expected seq number
+            
+            E.g., V(A) <= N(R) <= V(S) reads as:
+            if the last acknowledged sequence is less than or equal to the next expected seq is less than
+            or equal to the next send seq
+            
+            We get an RR with N(R) of 5, that means the receiver expects our next send seq to be 5
+            If this is equal to our last ack'd seq it means we've missed a whole window.
+            """
+            if state.get_send_state() >= state.get_recv_state() >= state.get_ack_state():
+                state.set_ack_state(s_frame.receive_seq_number)
+                if state.get_send_state() == state.get_ack_state():
+                    state.t3.start()
+                    return AX25StateType.Connected
+                else:
+                    print(f"Invoke retransmission, N(R)={state.get_recv_state()}")
+                    invoke_retransmission(state, ax25)
+                    return AX25StateType.TimerRecovery
+            else:
+                print("N(r) error recover")
+                nr_error_recovery(state, ax25)
+                return AX25StateType.AwaitingConnection
+        else:
+            if s_frame.get_command() == SupervisoryCommand.Command and s_frame.poll_final:
+                enquiry_response(state, ax25)
+            if state.get_ack_state() <= state.get_recv_state() <= state.get_send_state():
+                state.set_ack_state(s_frame.receive_seq_number)
+                return AX25StateType.TimerRecovery
+            else:
+                print("N(r) error recovery")
+                nr_error_recovery(state, ax25)
+                return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_DISC:
+        u_frame = cast(UFrame, event.packet)
+        state.clear_pending_iframes()
+        ua = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                            UnnumberedType.UA, u_frame.poll_final)
+        ax25.write_packet(ua)
+        ax25.dl_disconnect(state.remote_call, state.local_call)
+        state.t1.cancel()
+        state.t3.cancel()
+        return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.AX25_UA:
+        ax25.dl_error(state.remote_call, state.local_call, "C")
+        establish_data_link(state, ax25)
+        state.layer_3 = False
+        return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_UI:
+        ui_frame = cast(UIFrame, event.packet)
+        check_ui(ui_frame, ax25)
+        if ui_frame.poll_final:
+            enquiry_response(state, ax25)
+        return AX25StateType.TimerRecovery
+    elif event.event_type == AX25EventType.DL_UNIT_DATA:
+        pending = cast(InternalInfo, event.packet)
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, True,
+                              pending.protocol, pending.info)
+        ax25.write_packet(ui)
+        return AX25StateType.TimerRecovery
+    elif event.event_type == AX25EventType.AX25_DM:
+        ax25.dl_error(state.remote_call, state.local_call, "E")
+        ax25.dl_disconnect(state.remote_call, state.local_call)
+        state.clear_pending_iframes()
+        state.t1.cancel()
+        state.t3.cancel()
+        return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.AX25_INFO:
+        i_frame = cast(IFrame, event.packet)
+        if i_frame.get_command() == SupervisoryCommand.Command:
+            if i_frame.receive_seq_number <= state.get_send_state():
+                check_iframe_ack(state, ax25)
+                if i_frame.send_seq_number == state.get_recv_state():
+                    state.inc_recv_state()
+                    state.reject_exception = False
+                    ax25.dl_data(state.remote_call, state.local_call, i_frame.protocol, i_frame.info)
+                    if i_frame.poll:
+                        state.enqueue_info_ack(ax25)
+                else:
+                    if state.reject_exception:
+                        if i_frame.poll:
+                            rr = SFrame.s_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                                                SupervisoryType.RR, state.get_recv_state(), True)
+                            ax25.write_packet(rr)
+                            state.ack_pending = False
+                    else:
+                        state.reject_exception = True
+                        rr = SFrame.s_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
+                                            SupervisoryType.REJ, state.get_recv_state(), i_frame.poll)
+                        ax25.write_packet(rr)
+                        state.ack_pending = False
+                return AX25StateType.TimerRecovery
+            else:
+                nr_error_recovery(state, ax25)
+                return AX25StateType.AwaitingConnection
+        else:
+            ax25.dl_error(state.remote_call, state.local_call, "S")
+            return AX25StateType.TimerRecovery
+    elif event.event_type == AX25EventType.AX25_FRMR:
+        ax25.dl_error(state.remote_call, state.local_call, "K")
+        establish_data_link(state, ax25)
+        return AX25StateType.AwaitingConnection
+    else:
+        print(f"Ignoring {event}")
+        return AX25StateType.TimerRecovery
+
+
 class AX25StateMachine:
     """State management for AX.25 Data Links
 
@@ -618,9 +818,9 @@ class AX25StateMachine:
         self._handlers = {
             AX25StateType.Disconnected: disconnected_handler,
             AX25StateType.Connected: connected_handler,
-            AX25StateType.AwaitingConnection: awaiting_connection_handler
+            AX25StateType.AwaitingConnection: awaiting_connection_handler,
+            AX25StateType.TimerRecovery: timer_recovery_handler
         }
-
 
     def handle_packet(self, packet: AX25Packet):
         state = self._sessions.get(str(packet.source))
