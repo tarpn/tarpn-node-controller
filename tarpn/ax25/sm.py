@@ -806,6 +806,86 @@ def timer_recovery_handler(
         return AX25StateType.TimerRecovery
 
 
+def awaiting_release_handler(
+        state: AX25State,
+        event: AX25StateEvent,
+        ax25: AX25) -> AX25StateType:
+    assert state.current_state == AX25StateType.AwaitingRelease
+    print(f"in awaiting release state, got: {event}")
+    if event.event_type == AX25EventType.DL_DISCONNECT:
+        dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                            UnnumberedType.DM, False)
+        ax25.write_packet(dm)
+        return AX25StateType.Disconnected
+    elif event.event_type == AX25EventType.AX25_SABM:
+        u_frame = cast(UFrame, event.packet)
+        dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                            UnnumberedType.DM, u_frame.poll_final)
+        ax25.write_packet(dm)
+        return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.AX25_DISC:
+        u_frame = cast(UFrame, event.packet)
+        dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                            UnnumberedType.DM, u_frame.poll_final)
+        ax25.write_packet(dm)
+        return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.DL_UNIT_DATA:
+        pending = cast(InternalInfo, event.packet)
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                              True, pending.protocol, pending.info)
+        ax25.write_packet(ui)
+        return AX25StateType.AwaitingRelease
+    elif event.event_type in (AX25EventType.AX25_INFO, AX25EventType.AX25_RR, AX25EventType.AX25_RNR,
+                              AX25EventType.AX25_REJ,  AX25EventType.AX25_SREJ):
+        u_frame = cast(UFrame, event.packet)
+        if u_frame.poll_final:
+            dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                                UnnumberedType.DM, True)
+            ax25.write_packet(dm)
+        return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.AX25_UI:
+        ui = cast(UIFrame, event.packet)
+        check_ui(ui, ax25)
+        if ui.poll_final:
+            dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                                UnnumberedType.DM, True)
+            ax25.write_packet(dm)
+        return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.AX25_UA:
+        ua = cast(UFrame, event.packet)
+        if ua.poll_final:
+            ax25.dl_disconnect(state.remote_call, state.local_call)
+            state.t1.cancel()
+            return AX25StateType.Disconnected
+        else:
+            ax25.dl_error(state.remote_call, state.local_call, "D")
+            return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.AX25_DM:
+        ua = cast(UFrame, event.packet)
+        if ua.poll_final:
+            ax25.dl_disconnect(state.remote_call, state.local_call)
+            state.t1.cancel()
+            return AX25StateType.Disconnected
+        else:
+            return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.T1_EXPIRE:
+        if state.rc < 4:
+            state.rc += 1
+            disc = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                                  UnnumberedType.DISC, True)
+            ax25.write_packet(disc)
+            select_t1_value(state)
+            state.t1.start()
+            return AX25StateType.AwaitingRelease
+        else:
+            ax25.dl_error(state.remote_call, state.local_call, "H")
+            ax25.dl_disconnect(state.remote_call, state.local_call)
+            return AX25StateType.Disconnected
+    else:
+        print(f"Ignoring {event}")
+        return AX25StateType.AwaitingRelease
+
+
 class AX25StateMachine:
     """State management for AX.25 Data Links
 
@@ -819,7 +899,8 @@ class AX25StateMachine:
             AX25StateType.Disconnected: disconnected_handler,
             AX25StateType.Connected: connected_handler,
             AX25StateType.AwaitingConnection: awaiting_connection_handler,
-            AX25StateType.TimerRecovery: timer_recovery_handler
+            AX25StateType.TimerRecovery: timer_recovery_handler,
+            AX25StateType.AwaitingRelease: awaiting_release_handler
         }
 
     def handle_packet(self, packet: AX25Packet):
