@@ -136,7 +136,7 @@ class AX25State:
     rc: int = 0
     ack_pending: bool = False
     pending_frames: Queue = Queue()
-    sent_frames: Dict[int, IFrame] = field(default={})
+    sent_frames: Dict[int, IFrame] = field(default_factory=dict)
     srt: int = 1000
     ack_timer: Future = None
     reject_exception: bool = False
@@ -153,11 +153,11 @@ class AX25State:
         new_state.t3 = Timer(1, new_state.t3_timeout)
         return new_state
 
-    async def t1_timeout(self):
+    def t1_timeout(self):
         print(f"t1 for {self}")
         self.internal_event_cb(AX25StateEvent.t1_expire(self.remote_call))
 
-    async def t3_timeout(self):
+    def t3_timeout(self):
         print(f"t3 for {self}")
         self.internal_event_cb(AX25StateEvent.t3_expire(self.remote_call))
 
@@ -432,8 +432,21 @@ def awaiting_connection_handler(
     elif event.event_type == AX25EventType.AX25_DM:
         u_frame = cast(UFrame, event.packet)
         if u_frame.poll_final:
-            # TODO if layer 3
-            ax25.dl_connect(state.remote_call, state.local_call)
+            state.clear_pending_iframes()
+            ax25.dl_disconnect(state.remote_call, state.local_call)
+            state.t1.cancel()
+            return AX25StateType.Disconnected
+        else:
+            return AX25StateType.AwaitingConnection
+    elif event.event_type == AX25EventType.AX25_UA:
+        u_frame = cast(UFrame, event.packet)
+        if u_frame.poll_final:
+            if state.layer_3:
+                ax25.dl_connect(state.remote_call, state.local_call)
+            else:
+                if state.get_send_state() != state.get_ack_state():
+                    state.clear_pending_iframes()
+                    ax25.dl_connect(state.remote_call, state.local_call)
             state.reset()
             select_t1_value(state)
             return AX25StateType.Connected
@@ -903,11 +916,16 @@ class AX25StateMachine:
             AX25StateType.AwaitingRelease: awaiting_release_handler
         }
 
-    def handle_packet(self, packet: AX25Packet):
-        state = self._sessions.get(str(packet.source))
+    def _get_or_create_session(self, remote_call: AX25Call, local_call: AX25Call) -> AX25State:
+        session_id = str(remote_call)
+        state = self._sessions.get(session_id)
         if state is None:
-            state = AX25State.create(packet.source, packet.dest, self.handle_internal_event)
-            self._sessions[str(packet.source)] = state
+            state = AX25State.create(remote_call, local_call, self.handle_internal_event)
+            self._sessions[session_id] = state
+        return state
+
+    def handle_packet(self, packet: AX25Packet):
+        state = self._get_or_create_session(packet.source, packet.dest)
         event = AX25StateEvent.from_packet(packet)
         handler = self._handlers[state.current_state]
         if handler is None:

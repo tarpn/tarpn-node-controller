@@ -4,7 +4,7 @@ from typing import Callable, Awaitable
 
 
 class Timer:
-    def __init__(self, delay: int, cb: Callable[[], Awaitable[None]]):
+    def __init__(self, delay: int, cb: Callable[[], None]):
         """
         A resettable and cancelable timer class
         :param delay: Delay in seconds
@@ -12,30 +12,30 @@ class Timer:
         """
         self.delay = delay
         self._cb = cb
-        self._task = None
+        self._timer: asyncio.TimerHandle or None = None
         self._started = 0
 
     def start(self):
-        if self._task:
-            self._task.cancel()
-        self._task = asyncio.ensure_future(self._run())
+        if self._timer:
+            self._timer.cancel()
+        self._timer = asyncio.get_event_loop().call_later(self.delay, self._run_cb)
 
-    async def _run(self):
-        self._started = time.time()
-        await asyncio.sleep(self.delay)
-        await self._cb()
-        self._task = None
+    def _run_cb(self):
+        try:
+            self._cb()
+        finally:
+            self._timer = None
 
     def cancel(self):
-        if self._task:
-            self._task.cancel()
-            self._task = None
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
 
     def running(self):
-        return self._task is not None
+        return self._timer is not None
 
     def remaining(self):
-        if self._task:
+        if self.running():
             return self.delay - (time.time() - self._started)
         else:
             return -1

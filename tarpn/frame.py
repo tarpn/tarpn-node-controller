@@ -1,5 +1,6 @@
+import asyncio
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Dict
 
 
 @dataclass
@@ -12,10 +13,14 @@ class DataLinkFrame:
 
 class DataLinkMultiplexer:
     def __init__(self):
-        self.ports = {}
+        self.ports: Dict[int, asyncio.Queue] = {}
 
-    def add_port(self, port_id: int, port_cb: Callable[[DataLinkFrame], None]):
-        self.ports[port_id] = port_cb
+    def add_port(self, port_id: int, port_queue: asyncio.Queue):
+        self.ports[port_id] = port_queue
 
-    def get_port(self, port_id: int):
-        return self.ports.get(port_id)
+    def write_to_port(self, port_id: int, frame: DataLinkFrame):
+        queue = self.ports.get(port_id)
+        if queue:
+            asyncio.ensure_future(queue.put(frame))
+        else:
+            raise RuntimeError(f"Unknown port {port_id}")
