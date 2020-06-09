@@ -5,7 +5,7 @@ import asyncio
 from asyncio.queues import Queue
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, cast, Dict, List
+from typing import Callable, cast, Dict
 
 from asyncio import Future
 
@@ -149,8 +149,8 @@ class AX25State:
                local_call: AX25Call,
                internal_event_cb: Callable[[AX25StateEvent], None]):
         new_state = cls(str(remote_call), remote_call, local_call, internal_event_cb)
-        new_state.t1 = Timer(4, new_state.t1_timeout)
-        new_state.t3 = Timer(1, new_state.t3_timeout)
+        new_state.t1 = Timer(1, new_state.t1_timeout)
+        new_state.t3 = Timer(180, new_state.t3_timeout)
         return new_state
 
     def t1_timeout(self):
@@ -268,7 +268,7 @@ def select_t1_value(state: AX25State):
         state.srt = srt
         state.t1.delay = srt * 2
     else:
-        t1 = pow(2, (state.rc + 1.0) * state.srt)
+        t1 = pow(2, (state.rc + 1.0)) * state.srt
         state.t1.delay = t1
 
 

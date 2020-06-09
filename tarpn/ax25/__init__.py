@@ -34,6 +34,12 @@ class AX25Call:
 
 
 @dataclass
+class AX25Address:
+    port: int
+    call: AX25Call
+
+
+@dataclass
 class AX25Packet:
     buffer: bytes = field(repr=False)
     dest: AX25Call
@@ -256,7 +262,7 @@ class InternalInfo(AX25Packet):
 
     @classmethod
     def internal_info(cls, protocol: L3Protocol, info: bytes):
-        return cls(bytes(), AX25Call(), AX25Call(), [], 0x00, protocol, info)
+        return InternalInfo(bytes(), AX25Call(), AX25Call(), [], 0x00, protocol, info)
 
 
 @dataclass
@@ -316,7 +322,7 @@ def decode_ax25_packet(buffer: bytes):
             info = bytes(byte_iter)
             if next(byte_iter, None):
                 raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
-            return UIFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type, info, protocol)
+            return UIFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type, protocol, info)
         else:
             if next(byte_iter, None):
                 raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")

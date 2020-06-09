@@ -7,7 +7,7 @@ from tarpn.ax25 import decode_ax25_packet, L3Protocol, AX25Call, SupervisoryType
 from tarpn.ax25.sm import AX25StateEvent, AX25EventType, AX25StateType
 from tarpn.frame import DataLinkMultiplexer
 from tarpn.kiss import decode_kiss_frame
-from tarpn.test import AX25Impl
+from tarpn.test import AX25Impl, Echo
 
 
 class TestAX25(unittest.TestCase):
@@ -60,6 +60,7 @@ class TestAX25(unittest.TestCase):
         dlm_1 = DataLinkMultiplexer()
         dlm_1.add_port(0, out_queue_1)
         ax25_1 = AX25Impl(in_queue_1, dlm_1)
+        ax25_1.bind_l2_application(AX25Call("TEST", 1), Echo())
 
         # TEST-2
         in_queue_2 = asyncio.Queue()
@@ -99,4 +100,3 @@ class TestAX25(unittest.TestCase):
 
         assert ax25_1.state_machine._sessions["TEST-2"].current_state == AX25StateType.Connected
         assert ax25_2.state_machine._sessions["TEST-1"].current_state == AX25StateType.Connected
-

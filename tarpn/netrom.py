@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from enum import IntFlag
+from typing import cast, Dict
 
-from tarpn.ax25 import AX25Call, parse_ax25_call
+from tarpn.app import Application
+from tarpn.ax25 import AX25Call, parse_ax25_call, AX25Packet, UIFrame, L3Protocol
+from tarpn.frame import L3Handler
 
 
 class OpType(IntFlag):
@@ -96,4 +99,29 @@ def parse_netrom_packet(data: bytes):
     elif op_type in (OpType.InformationAcknowledge, OpType.DisconnectRequest, OpType.DisconnectAcknowledge):
         return NetRomPacket(origin, dest, ttl, circuit_idx, circuit_id, tx_seq_num, rx_seq_num, op_byte)
 
+
+class NetRomHandler(L3Handler):
+
+    def __init__(self):
+        self.l3_apps: Dict[AX25Call, Application] = {}
+
+    def maybe_handle_special(self, packet: AX25Packet) -> bool:
+        if type(packet) == UIFrame:
+            ui = cast(UIFrame, packet)
+            if ui.protocol == L3Protocol.NetRom and ui.dest == AX25Call("NODES"):
+                # Parse this NODES packet and mark it as handled
+                print("Got NODES")
+                return True
+        return False
+
+    def handle(self, data: bytes):
+        netrom_packet = parse_netrom_packet(data)
+        print(f"NET/ROM: {netrom_packet}")
+        # If packet is for us, handle it, otherwise route it
+        if netrom_packet.dest in self.l3_apps.keys():
+            # TODO pass to netrom state machine
+            pass
+        else:
+            # TODO route this towards its destination
+            pass
 
