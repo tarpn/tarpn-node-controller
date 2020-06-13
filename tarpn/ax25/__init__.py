@@ -11,6 +11,9 @@ class AX25Call:
     c_flag: bool = field(default=False, compare=False)
     last: bool = field(default=False, compare=False)
 
+    def __post_init__(self):
+        self.callsign = self.callsign.lower()
+
     def __repr__(self):
         return f"{self.callsign}-{self.ssid}"
 

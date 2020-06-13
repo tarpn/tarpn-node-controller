@@ -6,7 +6,7 @@ from tarpn.app import Logger, Context, Application
 from tarpn.ax25 import *
 from tarpn.ax25.datalink import DataLink
 from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
-from tarpn.frame import DataLinkMultiplexer
+from tarpn.frame import DataLinkMultiplexer, DataLinkFrame
 from tarpn.port.kiss import decode_kiss_frame
 
 
@@ -57,7 +57,7 @@ class TestAX25(unittest.TestCase):
         out_queue = asyncio.Queue()
         dlm = DataLinkMultiplexer()
         dlm.add_port(0, out_queue)
-        ax25 = DataLink(in_queue, dlm, Logger())
+        ax25 = DataLink(AX25Call("K4DBZ", 1), 0, in_queue, out_queue, Logger())
 
         # TODO don't do this here
         ax25.state_machine._get_or_create_session(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
@@ -68,30 +68,21 @@ class TestAX25(unittest.TestCase):
         state = ax25.state_machine._sessions["K4DBZ-2"]
         assert state.current_state == AX25StateType.AwaitingConnection
 
-        frame = cast(UFrame, asyncio.get_event_loop().run_until_complete(out_queue.get()))
-        assert frame.u_type == UnnumberedType.SABM
-
     def test_link(self):
         # TEST-1
         in_queue_1 = asyncio.Queue()
         out_queue_1 = asyncio.Queue()
-        dlm_1 = DataLinkMultiplexer()
-        dlm_1.add_port(0, out_queue_1)
-        ax25_1 = DataLink(in_queue_1, dlm_1, Logger())
-        ax25_1.bind_l2_application(AX25Call("TEST", 1), Echo())
+        ax25_1 = DataLink(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, Logger())
 
         # TEST-2
         in_queue_2 = asyncio.Queue()
         out_queue_2 = asyncio.Queue()
-        dlm_2 = DataLinkMultiplexer()
-        dlm_2.add_port(0, out_queue_2)
-        ax25_2 = DataLink(in_queue_2, dlm_2, Logger())
+        ax25_2 = DataLink(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, Logger())
 
         # TEST-2 connecting to TEST-1
         dl_connect = AX25StateEvent.dl_connect(AX25Call("TEST", 1), AX25Call("TEST", 2))
         ax25_2.state_machine._get_or_create_session(AX25Call("TEST", 1), AX25Call("TEST", 2))
         ax25_2.state_machine.handle_internal_event(dl_connect)
-        ax25_2.last_seen_on_port[AX25Call("TEST", 1)] = 0  # TODO fix this
 
         # Connect the queues
         async def bridge(source: asyncio.Queue, sink: asyncio.Queue):
