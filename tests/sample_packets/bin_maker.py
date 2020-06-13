@@ -1,5 +1,5 @@
 from tarpn.ax25 import UFrame, AX25Call, SupervisoryCommand, UnnumberedType
-from tarpn.kiss import encode_kiss_frame, KISSFrame, KISSCommand
+from tarpn.port.kiss import encode_kiss_frame, KISSFrame, KISSCommand
 
 if __name__ == "__main__":
     # Write out some binary KISS data

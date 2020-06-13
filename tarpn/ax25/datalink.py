@@ -9,19 +9,24 @@ from tarpn.frame import L3Handler, DataLinkMultiplexer, DataLinkFrame
 
 class DataLink(AX25):
     """
-    inbound queue of events from the various connected data ports
-    outbound queue
+    This accepts packets from one or more ports via the given queue. These are passed through
+    an AX.25 state machine which then emits outgoing packets or network events (such as DL_Connect).
+
+    This class also supports binding l2 applications and l3 handlers.
     """
-    def __init__(self, inbound: asyncio.Queue, dlm: DataLinkMultiplexer):
-        """AX25 data-link layer
-        :param inbound: queue of incoming packets from the transport
+    def __init__(self,
+                 inbound: asyncio.Queue,
+                 dlm: DataLinkMultiplexer,
+                 default_app: Application):
+        """
+        AX25 data-link layer
         """
         self.inbound = inbound
         self.dlm = dlm
         self.state_machine = AX25StateMachine(self)
         self.last_seen_on_port: Dict[AX25Call, int] = {}
         self.l2_apps: Dict[AX25Call, Application] = {}
-        self.default_app: Application = None
+        self.default_app: Application = default_app
         self.l3: Dict[L3Protocol, L3Handler] = {}
 
     async def start(self):

@@ -19,15 +19,15 @@ _default_port_settings = {
 }
 
 
-def _default_basedir(applicationName):
-    # taken from http://stackoverflow.com/questions/1084697/how-do-i-store-desktop-application-data-in-a-cross-platform-way-for-python
+def _default_basedir(app_name):
+    # taken from http://stackoverflow.com/questions/1084697/
     if sys.platform == "darwin":
         import appdirs
-        return appdirs.user_data_dir(applicationName, "")
+        return appdirs.user_data_dir(app_name, "")
     elif sys.platform == "win32":
-        return os.path.join(os.environ["APPDATA"], applicationName)
+        return os.path.join(os.environ["APPDATA"], app_name)
     else:
-        return os.path.expanduser(os.path.join("~", "." + applicationName.lower()))
+        return os.path.expanduser(os.path.join("~", "." + app_name.lower()))
 
 
 class Settings:

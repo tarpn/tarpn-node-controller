@@ -4,7 +4,7 @@ import sys
 
 import serial_asyncio
 
-from tarpn.kiss import KISSProtocol, KISSFrame, KISSCommand
+from tarpn.port.kiss import KISSProtocol, KISSFrame, KISSCommand
 
 
 async def cat(path, protocol):

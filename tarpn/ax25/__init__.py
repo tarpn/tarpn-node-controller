@@ -312,7 +312,7 @@ def decode_ax25_packet(buffer: bytes):
         send_seq = (control_byte >> 1) & 0x07
         if next(byte_iter, None):
             raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
-        return IFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, send_seq, info, protocol)
+        return IFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, send_seq, protocol, info)
     elif (control_byte & 0x03) == 0x03:
         # U frame
         u_type = UnnumberedType.from_control_byte(control_byte)

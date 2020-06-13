@@ -31,3 +31,17 @@ class Application:
 
     def read(self, context: Context, data: bytes):
         pass
+
+
+class Logger(Application):
+    def on_connect(self, context: Context):
+        print(f"Connected to {context.remote_address()}")
+
+    def on_disconnect(self, context: Context):
+        print(f"Disconnected from {context.remote_address()}")
+
+    def on_error(self, context: Context, error: str):
+        print(f"Error: {error}")
+
+    def read(self, context: Context, data: bytes):
+        print("Got: " + data.decode("ASCII"))

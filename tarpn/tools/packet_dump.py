@@ -5,7 +5,7 @@ from functools import partial
 import serial_asyncio
 
 from tarpn.ax25 import decode_ax25_packet
-from tarpn.kiss import KISSProtocol
+from tarpn.port.kiss import KISSProtocol
 
 
 async def printer(inbound):
