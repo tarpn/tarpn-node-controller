@@ -45,3 +45,18 @@ class Logger(Application):
 
     def read(self, context: Context, data: bytes):
         print("Got: " + data.decode("ASCII"))
+
+
+class Echo(Application):
+    def on_connect(self, context: Context):
+        print(f"ECHO Connected to {context.remote_address()}")
+
+    def on_disconnect(self, context: Context):
+        print(f"ECHO Disconnected from {context.remote_address()}")
+
+    def on_error(self, context: Context, error: str):
+        print(f"ECHO Error: {error}")
+
+    def read(self, context: Context, data: bytes):
+        print("ECHO Got: " + data.decode("ASCII"))
+        context.write(data)

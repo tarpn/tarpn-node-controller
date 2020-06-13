@@ -22,6 +22,25 @@ Now some "tarpn-" scripts are in your path. E.g.,
 tarpn-packet-dump /tmp/vmodem0 9600
 ```
 
+## RaspberryPi Setup
+
+Install Python 3.7, pip, and virtualenv
+
+```
+sudo apt-get install python3.7 python3-pip
+pip3 install virtualenv
+```
+
+Create a virtual python environment for tarpn-node-controller to run in and install it
+
+```
+python3 -m virtualenv venv
+source venv/bin/activate
+python setup.py install
+```
+
+
+
 ## Docker setup
 
 ```

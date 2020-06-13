@@ -2,7 +2,7 @@
 AX.25 State Machine Code
 """
 import asyncio
-from asyncio.queues import Queue
+import queue
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, cast, Dict
@@ -54,12 +54,16 @@ class AX25StateEvent:
     event_type: AX25EventType
 
     @classmethod
-    def t1_expire(cls, retry_call: AX25Call):
-        return cls(retry_call, None, AX25EventType.T1_EXPIRE)
+    def t1_expire(cls, remote_call: AX25Call):
+        return cls(remote_call, None, AX25EventType.T1_EXPIRE)
 
     @classmethod
-    def t3_expire(cls, retry_call: AX25Call):
-        return cls(retry_call, None, AX25EventType.T3_EXPIRE)
+    def t3_expire(cls, remote_call: AX25Call):
+        return cls(remote_call, None, AX25EventType.T3_EXPIRE)
+
+    @classmethod
+    def iframe_ready(cls, remote_call: AX25Call):
+        return cls(remote_call, None, AX25EventType.IFRAME_READY)
 
     @classmethod
     def from_packet(cls, packet: AX25Packet):
@@ -135,7 +139,7 @@ class AX25State:
     va: int = 0
     rc: int = 0
     ack_pending: bool = False
-    pending_frames: Queue = Queue()
+    pending_frames: queue.Queue = queue.Queue()
     sent_frames: Dict[int, IFrame] = field(default_factory=dict)
     srt: int = 1000
     ack_timer: Future = None
@@ -182,6 +186,7 @@ class AX25State:
 
     def push_iframe(self, i_frame: InternalInfo):
         self.pending_frames.put(i_frame)
+        self.internal_event_cb(AX25StateEvent.iframe_ready(self.remote_call))
 
     def get_send_state(self):
         return self.vs % 8
@@ -411,7 +416,7 @@ def awaiting_connection_handler(
         pending = cast(InternalInfo, event.packet)
         state.push_iframe(pending)
         return AX25StateType.AwaitingConnection
-    elif not state.pending_frames.empty():
+    elif event.event_type == AX25EventType.IFRAME_READY:
         pending = cast(InternalInfo, state.pending_frames.get())
         asyncio.ensure_future(delay_outgoing_data(state, pending))
         return AX25StateType.AwaitingConnection
@@ -507,20 +512,21 @@ def connected_handler(
         pending = cast(InternalInfo, event.packet)
         state.push_iframe(pending)
         return AX25StateType.Connected
-    elif not state.pending_frames.empty():
+    elif event.event_type == AX25EventType.IFRAME_READY:
         pending = cast(InternalInfo, state.pending_frames.get())
+        print(f"Pending iframe: {pending}")
         if state.window_exceeded():
             asyncio.ensure_future(delay_outgoing_data(state, pending))
-            state.pending_frames.task_done()
-        i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
-                                 state.get_send_state(), state.get_recv_state(), pending.protocol, pending.info)
-        ax25.write_packet(i_frame)
-        state.sent_frames[state.get_send_state()] = i_frame
-        state.vs += 1
-        state.ack_pending = False
-        if state.t1.running():
-            state.t3.cancel()
-            state.t1.start()
+        else:
+            i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
+                                     state.get_send_state(), state.get_recv_state(), pending.protocol, pending.info)
+            ax25.write_packet(i_frame)
+            state.sent_frames[state.get_send_state()] = i_frame
+            state.vs += 1
+            state.ack_pending = False
+            if state.t1.running():
+                state.t3.cancel()
+                state.t1.start()
         state.pending_frames.task_done()
         return AX25StateType.Connected
     elif event.event_type == AX25EventType.T1_EXPIRE:
@@ -652,7 +658,7 @@ def timer_recovery_handler(
         pending = cast(InternalInfo, event.packet)
         state.push_iframe(pending)
         return AX25StateType.TimerRecovery
-    elif not state.pending_frames.empty():
+    elif event.event_type == AX25EventType.IFRAME_READY:
         pending = cast(InternalInfo, state.pending_frames.get())
         if state.window_exceeded():
             asyncio.ensure_future(delay_outgoing_data(state, pending))
@@ -783,7 +789,7 @@ def timer_recovery_handler(
         i_frame = cast(IFrame, event.packet)
         if i_frame.get_command() == SupervisoryCommand.Command:
             if i_frame.receive_seq_number <= state.get_send_state():
-                check_iframe_ack(state, ax25)
+                check_iframe_ack(state, i_frame.receive_seq_number)
                 if i_frame.send_seq_number == state.get_recv_state():
                     state.inc_recv_state()
                     state.reject_exception = False
@@ -936,7 +942,7 @@ class AX25StateMachine:
     def handle_internal_event(self, event: AX25StateEvent):
         state = self._sessions.get(str(event.remote_call))
         if not state:
-            raise RuntimeError(f"No session for timer event {event}")
+            raise RuntimeError(f"No session for internal event {event}")
         handler = self._handlers[state.current_state]
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")

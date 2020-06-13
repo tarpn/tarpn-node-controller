@@ -41,7 +41,7 @@ class DataLink(AX25):
             try:
                 packet = decode_ax25_packet(frame.data)
                 if not packet.dest == self.link_call:
-                    print(f"Discarding packet not for us {packet}")
+                    print(f"Discarding packet not for us {packet}. We are {self.link_call}")
                     return
 
                 # Check if this is a special L3 message
@@ -105,8 +105,6 @@ class DataLink(AX25):
         self.default_app.read(context, data)
 
     def write_packet(self, packet: AX25Packet):
-        asyncio.ensure_future(self._async_write(packet))
-
-    async def _async_write(self, packet: AX25Packet):
+        print(f"Sending out {packet}")
         frame = DataLinkFrame(self.link_port, packet.buffer, 0)
         asyncio.ensure_future(self.outbound.put(frame))

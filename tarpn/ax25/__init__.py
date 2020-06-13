@@ -12,7 +12,7 @@ class AX25Call:
     last: bool = field(default=False, compare=False)
 
     def __post_init__(self):
-        self.callsign = self.callsign.lower()
+        self.callsign = self.callsign.upper()
 
     def __repr__(self):
         return f"{self.callsign}-{self.ssid}"
@@ -34,6 +34,13 @@ class AX25Call:
             ssid_byte |= 0x80
         ssid_byte |= ((self.rr << 5) & 0x60)
         buffer.append(ssid_byte)
+
+    @classmethod
+    def parse(cls, s: str):
+        parts = s.split("-")
+        if len(parts) != 2:
+            raise ValueError(f"Cannot parse callsign {s}. Expected callsign with ssid (e.g., C4LL-9)")
+        return cls(parts[0], int(parts[1]))
 
 
 @dataclass

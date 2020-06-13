@@ -1,9 +1,9 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name='tarpn',
     version='',
-    packages=['tarpn'],
+    packages=find_packages(),
     url='',
     license='',
     author='David Arthur',
@@ -13,7 +13,22 @@ setup(
              'console_scripts': [
                  'tarpn-serial-dump = tarpn.tools.serial_dump:main',
                  'tarpn-kiss-cat = tarpn.tools.kiss_cat:main',
-                 'tarpn-packet-dump = tarpn.tools.packet_dump:main'
+                 'tarpn-packet-dump = tarpn.tools.packet_dump:main',
+                 'tarpn-node = tarpn.main:main'
              ]},
-    python_requires='>=3.7'
+    python_requires='>=3.7',
+    install_requires=[
+        'appdirs==1.4.4',
+        'asyncio==3.4.3',
+        'hexdump==3.3',
+        'pyserial==3.4',
+        'pyserial-asyncio==0.4'
+    ],
+    extra_requires=[
+        # Linting, according to PEP8
+        'flake8==3.8.3',
+
+        # Type checker
+        'mypy==0.780'
+    ]
 )
