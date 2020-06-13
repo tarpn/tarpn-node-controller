@@ -2,9 +2,8 @@ import asyncio
 import unittest
 from typing import cast
 
-from tarpn.ax25 import decode_ax25_packet, L3Protocol, AX25Call, SupervisoryType, SFrame, SupervisoryCommand, \
-    AX25Packet, DummyPacket, UFrame, UnnumberedType
-from tarpn.ax25.sm import AX25StateEvent, AX25EventType, AX25StateType
+from tarpn.ax25 import *
+from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
 from tarpn.frame import DataLinkMultiplexer
 from tarpn.kiss import decode_kiss_frame
 from tarpn.test import AX25Impl, Echo
@@ -68,6 +67,8 @@ class TestAX25(unittest.TestCase):
         dlm_2 = DataLinkMultiplexer()
         dlm_2.add_port(0, out_queue_2)
         ax25_2 = AX25Impl(in_queue_2, dlm_2)
+
+        ax25_2.connect()
 
         # TEST-2 connecting to TEST-1
         dl_connect = AX25StateEvent.dl_connect(AX25Call("TEST", 1), AX25Call("TEST", 2))

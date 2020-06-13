@@ -4,6 +4,7 @@ from enum import IntEnum, unique
 import asyncio
 
 from tarpn.frame import DataLinkFrame
+from tarpn.settings import PortConfig
 
 
 @unique
@@ -45,13 +46,13 @@ class KISSProtocol(asyncio.Protocol):
                  loop: asyncio.AbstractEventLoop,
                  inbound: asyncio.Queue,    # DataLinkFrame
                  outbound: asyncio.Queue,   # DataLinkFrame
-                 tnc_port: int,
+                 port_config: PortConfig,
                  check_crc=False):
         self.loop = loop
         self.inbound = inbound
         self.outbound = outbound
         self.check_crc = check_crc
-        self.tnc_port = tnc_port
+        self.port_config = port_config
         self.transport = None
         self._buffer = bytearray()
         self.msgs_recvd = 0
@@ -70,7 +71,7 @@ class KISSProtocol(asyncio.Protocol):
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
                     if frame.command == KISSCommand.Data:
                         asyncio.ensure_future(self.inbound.put(
-                            DataLinkFrame(self.tnc_port, frame.data, frame.hdlc_port,
+                            DataLinkFrame(self.port_config.port_id(), frame.data, frame.hdlc_port,
                                           self._data_callback(frame.hdlc_port))))
                     elif frame.command == KISSCommand.SetHardware:
                         self.on_hardware(frame)

@@ -10,7 +10,7 @@ from typing import Callable, cast, Dict
 from asyncio import Future
 
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
-    L3Protocol, InternalInfo, SupervisoryCommand, AX25, DummyPacket
+    L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25
 from tarpn.util import Timer
 
 
