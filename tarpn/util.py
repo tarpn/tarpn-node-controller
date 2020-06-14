@@ -12,7 +12,7 @@ class Timer:
         """
         self.delay = delay
         self._cb = cb
-        self._timer: asyncio.TimerHandle or None = None
+        self._timer: asyncio.TimerHandle = None
         self._started = 0
 
     def start(self):

@@ -502,7 +502,7 @@ def connected_handler(
     elif event.event_type == AX25EventType.DL_DISCONNECT:
         state.clear_pending_iframes()
         state.rc = 0
-        u_frame = UFrame.u_frame(state.remote_call, state.local_call, SupervisoryCommand.Command,
+        u_frame = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                                  UnnumberedType.DISC, True)
         ax25.write_packet(u_frame)
         state.t3.cancel()
@@ -561,7 +561,7 @@ def connected_handler(
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.AX25_UA:
         ax25.dl_error(state.remote_call, state.local_call, "C")
-        establish_data_link(ax25)
+        establish_data_link(state, ax25)
         state.layer_3 = False
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_DM:
@@ -609,13 +609,13 @@ def connected_handler(
                 else:
                     if state.reject_exception:
                         if i_frame.poll:
-                            rr = SFrame.s_frame(state.remote_call, state.local_call, SupervisoryCommand.Response,
+                            rr = SFrame.s_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
                                                 SupervisoryType.RR, state.get_recv_state(), True)
                             ax25.write_packet(rr)
                             state.ack_pending = False
                     else:
                         state.reject_exception = True
-                        rej = SFrame.s_frame(state.remote_call, state.local_call, SupervisoryCommand.Response,
+                        rej = SFrame.s_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response,
                                              SupervisoryType.REJ, state.get_recv_state(), i_frame.poll)
                         ax25.write_packet(rej)
                 return AX25StateType.Connected
