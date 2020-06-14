@@ -57,7 +57,8 @@ class Settings:
         self._config.read(self._configfile)
 
     def save(self):
-        self._config.write()
+        # self._config.write()
+        return
 
     def node_config(self):
         return NodeConfig(self._config["node"])

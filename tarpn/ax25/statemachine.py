@@ -5,7 +5,7 @@ import asyncio
 import queue
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, cast, Dict
+from typing import Callable, cast, Dict, Optional
 
 from asyncio import Future
 
@@ -50,7 +50,7 @@ class AX25StateType(Enum):
 @dataclass
 class AX25StateEvent:
     remote_call: AX25Call
-    packet: AX25Packet
+    packet: Optional[AX25Packet]
     event_type: AX25EventType
 
     @classmethod
@@ -662,7 +662,6 @@ def timer_recovery_handler(
         pending = cast(InternalInfo, state.pending_frames.get())
         if state.window_exceeded():
             asyncio.ensure_future(delay_outgoing_data(state, pending))
-            state.pending_frames.task_done()
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
                                      state.get_recv_state(), state.get_send_state(), pending.protocol, pending.info)
@@ -673,7 +672,7 @@ def timer_recovery_handler(
             if not state.t1.running():
                 state.t3.cancel()
                 state.t1.start()
-            state.pending_frames.task_done()
+        state.pending_frames.task_done()
         return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.T1_EXPIRE:
         if state.rc < 4:
@@ -706,7 +705,7 @@ def timer_recovery_handler(
         return AX25StateType.Connected
     elif event.event_type == AX25EventType.AX25_RNR:
         # TODO Set peer busy
-        pass
+        return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.AX25_RR:
         # TODO Set peer clear
         s_frame = cast(SFrame, event.packet)

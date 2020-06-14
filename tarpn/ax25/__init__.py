@@ -321,7 +321,7 @@ def decode_ax25_packet(buffer: bytes):
         recv_seq = (control_byte >> 5) & 0x07
         send_seq = (control_byte >> 1) & 0x07
         if next(byte_iter, None):
-            raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
+            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
         return IFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, send_seq, protocol, info)
     elif (control_byte & 0x03) == 0x03:
         # U frame
@@ -331,18 +331,18 @@ def decode_ax25_packet(buffer: bytes):
             protocol = L3Protocol(pid_byte)
             info = bytes(byte_iter)
             if next(byte_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
             return UIFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type, protocol, info)
         else:
             if next(byte_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
             return UFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type)
     else:
         # S frame
         recv_seq = (control_byte & 0xE0) >> 5
         s_type = SupervisoryType.from_control_byte(control_byte)
         if next(byte_iter, None):
-            raise BufferError(f"Underflow exception, did not expect any more bytes here. {buffer}")
+            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
         return SFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, s_type)
 
 

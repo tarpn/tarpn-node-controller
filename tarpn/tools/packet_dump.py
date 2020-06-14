@@ -25,8 +25,8 @@ def main():
     args = parser.parse_args()
 
     loop = asyncio.get_event_loop()
-    in_queue = asyncio.Queue()
-    out_queue = asyncio.Queue()
+    in_queue: asyncio.Queue = asyncio.Queue()
+    out_queue: asyncio.Queue = asyncio.Queue()
     protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, tnc_port=0, check_crc=args.check_crc)
     protocol = serial_asyncio.create_serial_connection(loop, protocol_factory, args.port, baudrate=args.baud)
     asyncio.ensure_future(protocol)

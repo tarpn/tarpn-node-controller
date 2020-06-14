@@ -1,10 +1,10 @@
 import asyncio
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 
 class Timer:
-    def __init__(self, delay: int, cb: Callable[[], None]):
+    def __init__(self, delay: float, cb: Callable[[], None]):
         """
         A resettable and cancelable timer class
         :param delay: Delay in seconds
@@ -12,8 +12,8 @@ class Timer:
         """
         self.delay = delay
         self._cb = cb
-        self._timer: asyncio.TimerHandle = None
         self._started = 0
+        self._timer: Optional[asyncio.TimerHandle] = None
 
     def start(self):
         if self._timer:
@@ -39,6 +39,3 @@ class Timer:
             return self.delay - (time.time() - self._started)
         else:
             return -1
-
-
-
