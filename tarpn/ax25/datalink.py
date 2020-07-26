@@ -40,9 +40,6 @@ class DataLink(AX25):
         if frame:
             try:
                 packet = decode_ax25_packet(frame.data)
-                if not packet.dest == self.link_call:
-                    print(f"Discarding packet not for us {packet}. We are {self.link_call}")
-                    return
 
                 # Check if this is a special L3 message
                 l3_handled = False
@@ -51,11 +48,21 @@ class DataLink(AX25):
                     if l3_handled:
                         break
 
+                if not packet.dest == self.link_call:
+                    print(f"Discarding packet not for us {packet}. We are {self.link_call}")
+                    return
+
                 # If it has not been handled by L3
                 if not l3_handled:
                     self.state_machine.handle_packet(packet)
             finally:
                 self.inbound.task_done()
+
+    def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
+        def inner(data: bytes):
+            self.state_machine.handle_internal_event(
+                AX25StateEvent.dl_data(remote_call, protocol, data))
+        return inner
 
     def _writer_partial(self, remote_call: AX25Call):
         def inner(data: bytes):
@@ -97,12 +104,20 @@ class DataLink(AX25):
         self.default_app.on_disconnect(context)
 
     def dl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
-        context = Context(
-            self._writer_partial(remote_call),
-            self._closer_partial(remote_call, local_call),
-            remote_call
-        )
-        self.default_app.read(context, data)
+        if protocol in (L3Protocol.NoLayer3, L3Protocol.NoProtocol):
+            # If no protocol defined, handle with the default L2 app
+            context = Context(
+                self._writer_partial(remote_call),
+                self._closer_partial(remote_call, local_call),
+                remote_call
+            )
+            self.default_app.read(context, data)
+        else:
+            l3 = self.l3.get(protocol)
+            if l3:
+                l3.handle(self.link_port, data)
+            else:
+                print(f"No handler defined for protocol {protocol}. Discarding")
 
     def write_packet(self, packet: AX25Packet):
         print(f"Sending out {packet}")

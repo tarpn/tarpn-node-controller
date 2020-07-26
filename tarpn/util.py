@@ -39,3 +39,12 @@ class Timer:
             return self.delay - (time.time() - self._started)
         else:
             return -1
+
+
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    if len(lst) == 0:
+        yield []
+    else:
+        for i in range(0, len(lst), n):
+            yield lst[i:i + n]

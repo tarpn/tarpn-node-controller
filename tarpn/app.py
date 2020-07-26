@@ -59,4 +59,5 @@ class Echo(Application):
 
     def read(self, context: Context, data: bytes):
         print("ECHO Got: " + data.decode("ASCII"))
-        context.write(data)
+        msg = "You said: " + data.decode("ASCII")
+        context.write(msg.encode("ASCII"))

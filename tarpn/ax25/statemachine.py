@@ -214,7 +214,10 @@ class AX25State:
 
     def window_exceeded(self):
         """If V(S) is equal to V(A) + window size (7) means we can't transmit any more until we get an ACK"""
-        return (self.vs % 8) == ((self.va + 7) % 8)
+        exceeded = (self.vs % 8) == ((self.va + 7) % 8)
+        if exceeded:
+            print(f"vs: {self.vs} va: {self.va} k: 7")
+        return exceeded
 
     def check_send_eq_ack(self):
         return self.vs % 8 == self.va
@@ -516,6 +519,7 @@ def connected_handler(
         pending = cast(InternalInfo, state.pending_frames.get())
         print(f"Pending iframe: {pending}")
         if state.window_exceeded():
+            print("Delaying frame")
             asyncio.ensure_future(delay_outgoing_data(state, pending))
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
@@ -661,6 +665,7 @@ def timer_recovery_handler(
     elif event.event_type == AX25EventType.IFRAME_READY:
         pending = cast(InternalInfo, state.pending_frames.get())
         if state.window_exceeded():
+            print("Delaying outgoing frame")
             asyncio.ensure_future(delay_outgoing_data(state, pending))
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
@@ -727,6 +732,8 @@ def timer_recovery_handler(
             We get an RR with N(R) of 5, that means the receiver expects our next send seq to be 5
             If this is equal to our last ack'd seq it means we've missed a whole window.
             """
+            state.t1.cancel()
+            select_t1_value(state)
             if state.get_send_state() >= state.get_recv_state() >= state.get_ack_state():
                 state.set_ack_state(s_frame.receive_seq_number)
                 if state.get_send_state() == state.get_ack_state():

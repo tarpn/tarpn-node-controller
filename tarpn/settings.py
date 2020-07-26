@@ -7,6 +7,13 @@ _default_settings = {
     "node": {
         "id.message": "Terrestrial Amateur Radio Packet Network node ${node.alias} op is ${node.call}",
         "id.interval": 600
+    },
+    "network": {
+        "netrom.ttl": 7,
+        "netrom.obs.min": 4,
+        "netrom.obs.init": 6,
+        "netrom.nodes.quality.min": 73,
+        "netrom.nodes.interval": 300
     }
 }
 
@@ -73,6 +80,9 @@ class Settings:
             port_sect = self._config[f"port:{port}"]
             PortConfig.from_dict(port, port_sect)
 
+    def network_configs(self):
+        return NetworkConfig(self._config["network"])
+
 
 class Config:
     def __init__(self, section_name, config_section):
@@ -132,3 +142,36 @@ class PortConfig(Config):
         parser.read_dict({f"port:{port_id}": configs})
         config = parser[f"port:{port_id}"]
         return cls(port_id, config)
+
+
+class NetworkConfig(Config):
+    def __init__(self, config_section):
+        super().__init__("network", config_section)
+
+    def ttl(self) -> int:
+        return super().get_int("netrom.ttl")
+
+    def min_obs(self) -> int:
+        return super().get_int("netrom.obs.min")
+
+    def init_obs(self) -> int:
+        return super().get_int("netrom.obs.init")
+
+    def min_qual(self) -> int:
+        return super().get_int("netrom.nodes.quality.min")
+
+    def nodes_interval(self) -> int:
+        return super().get_int("netrom.nodes.interval")
+
+    def node_call(self) -> str:
+        return super().get("netrom.node.call")
+
+    def node_alias(self) -> str:
+        return super().get("netrom.node.alias")
+
+    @classmethod
+    def from_dict(cls, configs: dict):
+        parser = configparser.ConfigParser(defaults=_default_settings["network"])
+        parser.read_dict({f"network": configs})
+        config = parser[f"network"]
+        return cls(config)
