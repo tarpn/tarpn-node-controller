@@ -8,7 +8,7 @@ from tarpn.port import port_factory
 from tarpn.settings import PortConfig
 
 
-async def produce(count, queue):
+async def produce(count, size, queue):
     out = []
     for i in range(count):
         data = os.urandom(32)
@@ -34,6 +34,8 @@ async def async_main():
     parser.add_argument("port2", help="Serial device 2")
     parser.add_argument("baud", type=int, help="Baudrate to use")
     parser.add_argument("count", type=int, default=1000, help="Number of packets to send")
+    parser.add_argument("size", type=int, default=32, help="Number of random bytes per packet")
+
     parser.add_argument("--check_crc", type=bool, default=False)
     args = parser.parse_args()
 
@@ -62,7 +64,7 @@ async def async_main():
     out_queue_2: asyncio.Queue = asyncio.Queue()
     await port_factory(in_queue_2, out_queue_2, port_2)
 
-    produce_coro = produce(args.count, out_queue_1)
+    produce_coro = produce(args.count, args.size, out_queue_1)
     consume_coro = consume(args.count, in_queue_2)
 
     t0 = time.time()
