@@ -159,14 +159,14 @@ def parse_netrom_packet(data: bytes):
 
 
 class NetRom:
-    def nl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
+    def nl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes) -> None:
         raise NotImplemented
 
-    def nl_connect(self, remote_call: AX25Call, local_call: AX25Call):
+    def nl_connect(self, remote_call: AX25Call, local_call: AX25Call) -> None:
         raise NotImplemented
 
-    def nl_disconnect(self, remote_call: AX25Call, local_call: AX25Call):
+    def nl_disconnect(self, remote_call: AX25Call, local_call: AX25Call) -> None:
         raise NotImplemented
 
-    def write_packet(self, packet: NetRomPacket):
+    def write_packet(self, packet: NetRomPacket) -> bool:
         raise NotImplemented

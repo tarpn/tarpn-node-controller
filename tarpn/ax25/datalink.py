@@ -44,19 +44,20 @@ class DataLink(AX25):
                 # Check if this is a special L3 message
                 l3_handled = False
                 for l3 in self.l3.values():
-                    l3_handled = l3.maybe_handle_special(packet)
-                    if l3_handled:
+                    should_continue = l3.maybe_handle_special(packet)
+                    if not should_continue:
                         break
-
-                if not packet.dest == self.link_call:
-                    print(f"Discarding packet not for us {packet}. We are {self.link_call}")
-                    return
 
                 # If it has not been handled by L3
                 if not l3_handled:
+                    if not packet.dest == self.link_call:
+                        print(f"Discarding packet not for us {packet}. We are {self.link_call}")
+                        return
                     self.state_machine.handle_packet(packet)
             finally:
                 self.inbound.task_done()
+        # Give any async operations a chance to run
+        await asyncio.gather()
 
     def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
         def inner(data: bytes):
@@ -115,11 +116,11 @@ class DataLink(AX25):
         else:
             l3 = self.l3.get(protocol)
             if l3:
-                l3.handle(self.link_port, data)
+                l3.handle(self.link_port, remote_call, data)
             else:
                 print(f"No handler defined for protocol {protocol}. Discarding")
 
     def write_packet(self, packet: AX25Packet):
         print(f"Sending out {packet}")
         frame = DataLinkFrame(self.link_port, packet.buffer, 0)
-        asyncio.ensure_future(self.outbound.put(frame))
+        asyncio.create_task(self.outbound.put(frame))

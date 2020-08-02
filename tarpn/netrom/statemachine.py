@@ -141,16 +141,18 @@ def disconnected_handler(
             7,  # TODO get TTL from config
             connect_req.circuit_idx,
             connect_req.circuit_id,
-            0,  # TODO our circuit idx
-            0,  # TODO our circuit id
+            circuit.circuit_idx,
+            circuit.circuit_id,
             OpType.ConnectAcknowledge.as_op_byte(False, False, False),
             connect_req.proposed_window_size
         )
         circuit.remote_circuit_id = connect_req.circuit_id
         circuit.remote_circuit_idx = connect_req.circuit_idx
-        netrom.write_packet(connect_ack)
-        netrom.nl_connect(circuit.remote_call, circuit.local_call)
-        return NetRomStateType.Connected
+        if netrom.write_packet(connect_ack):
+            netrom.nl_connect(circuit.remote_call, circuit.local_call)
+            return NetRomStateType.Connected
+        else:
+            return NetRomStateType.Disconnected
     elif event.event_type in (NetRomEventType.NETROM_CONNECT_ACK, NetRomEventType.NETROM_DISCONNECT,
                               NetRomEventType.NETROM_DISCONNECT_ACK, NetRomEventType.NETROM_INFO,
                               NetRomEventType.NETROM_INFO_ACK):
@@ -177,8 +179,10 @@ def disconnected_handler(
             circuit.local_call,  # Origin user
             circuit.local_call  # Origin node
         )
-        netrom.write_packet(conn)
-        return NetRomStateType.AwaitingConnection
+        if netrom.write_packet(conn):
+            return NetRomStateType.AwaitingConnection
+        else:
+            return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NL_DISCONNECT:
         return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NL_DATA:
@@ -253,6 +257,7 @@ def connected_handler(
             return NetRomStateType.Connected
         else:
             # Reject this and disconnect
+            print("Rejecting connect request due to invalid circuit ID/IDX")
             connect_rej = NetRomConnectAck(
                 connect_req.origin_node,
                 connect_req.dest,

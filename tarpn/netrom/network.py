@@ -175,7 +175,6 @@ class RoutingTable:
         """
         print("Pruning routes")
         for call, destination in list(self.destinations.items()):
-            print(destination)
             for neighbor, route in list(destination.neighbor_map.items()):
                 route.obsolescence -= 1
                 if route.obsolescence <= 0:
@@ -252,10 +251,11 @@ class NetRomNetwork(NetRom, L3Handler):
                 # Parse this NODES packet and mark it as handled
                 nodes = parse_netrom_nodes(ui.info)
                 asyncio.get_event_loop().create_task(self._update_nodes(packet.source, nodes))
-                return True
-        return False
+                # Stop further processing
+                return False
+        return True
 
-    def handle(self, port: int, data: bytes):
+    def handle(self, port: int, remote_call: AX25Call, data: bytes):
         netrom_packet = parse_netrom_packet(data)
         print(f"NET/ROM: {netrom_packet}")
 
@@ -274,7 +274,7 @@ class NetRomNetwork(NetRom, L3Handler):
     def nl_disconnect(self, remote_call: AX25Call, local_call: AX25Call):
         print(f"NL got disconnected from: {remote_call}")
 
-    def write_packet(self, packet: NetRomPacket):
+    def write_packet(self, packet: NetRomPacket) -> bool:
         possible_routes = self.router.route(packet)
 
         routed = False
@@ -293,6 +293,8 @@ class NetRomNetwork(NetRom, L3Handler):
 
         if not routed:
             print(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
+
+        return routed
 
     def bind_data_link(self, port: int, data_link: DataLink):
         self.data_links[port] = data_link

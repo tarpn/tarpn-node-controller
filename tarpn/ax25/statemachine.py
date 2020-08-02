@@ -738,6 +738,7 @@ def timer_recovery_handler(
                 state.set_ack_state(s_frame.receive_seq_number)
                 if state.get_send_state() == state.get_ack_state():
                     state.t3.start()
+                    print("Re-connected")
                     return AX25StateType.Connected
                 else:
                     print(f"Invoke retransmission, N(R)={state.get_recv_state()}")
@@ -752,6 +753,7 @@ def timer_recovery_handler(
                 enquiry_response(state, ax25)
             if state.get_ack_state() <= state.get_recv_state() <= state.get_send_state():
                 state.set_ack_state(s_frame.receive_seq_number)
+                print("Still in timer recovery")
                 return AX25StateType.TimerRecovery
             else:
                 print("N(r) error recovery")

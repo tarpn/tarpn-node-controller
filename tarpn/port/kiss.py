@@ -109,7 +109,7 @@ class KISSProtocol(asyncio.Protocol):
                 break
             kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
             kiss_data = encode_kiss_frame(kiss_frame, False)
-            print(f"Sending {kiss_data}")
+            # print(f"Sending {kiss_data}")
             self.transport.serial.write(kiss_data)
             self.outbound.task_done()
 
@@ -181,7 +181,8 @@ def decode_kiss_frame(data, check_crc=False):
                 elif b == KISSMagic.TFESC:
                     decoded += KISSMagic.FESC.to_bytes(1, 'big')
                 in_escape = False
-            decoded += b.to_bytes(1, 'big')
+            else:
+                decoded += b.to_bytes(1, 'big')
 
     if check_crc:
         kiss_crc = decoded[-1]
