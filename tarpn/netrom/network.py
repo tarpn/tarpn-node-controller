@@ -28,6 +28,7 @@ class Neighbor:
 
 @dataclass
 class Route:
+    neighbor: AX25Call
     dest: AX25Call
     next_hop: AX25Call
     quality: int
@@ -102,7 +103,9 @@ class NetRomNodes:
 class RoutingTable:
     node_alias: str
     our_calls: List[AX25Call] = field(default_factory=list)
+    # Neighbors is a map of direct neighbors we have, who we have heard NODES from
     neighbors: Dict[AX25Call, Neighbor] = field(default_factory=dict)
+    # Destinations is the content of the NODES table, what routes exist to other nodes through which neighbors
     destinations: Dict[AX25Call, Destination] = field(default_factory=dict)
     # TODO config all these
     default_obs: int = 100
@@ -120,12 +123,18 @@ class RoutingTable:
         return s.strip()
 
     def route(self, packet: NetRomPacket) -> List[AX25Call]:
-        dest = self.destinations.get(packet.dest)
-        if dest:
-            return [n.next_hop for n in dest.sorted_neighbors()]
+        """
+        If a packet's destination is a known neighbor, route to it. Otherwise look up the route with the highest
+        quality and send the packet to the neighbor which provided that route
+        :param packet:
+        :return: list of neighbor callsign's in sorted order of route quality
+        """
+        if packet.dest in self.neighbors:
+            return [packet.dest]
         else:
-            if packet.dest in self.neighbors:
-                return [packet.dest]
+            dest = self.destinations.get(packet.dest)
+            if dest:
+                return [n.neighbor for n in dest.sorted_neighbors()]
             else:
                 return []
 
@@ -141,7 +150,8 @@ class RoutingTable:
 
         # Add direct route to whoever sent the NODES
         dest = self.destinations.get(heard_from, Destination(heard_from, nodes.sending_alias))
-        dest.neighbor_map[heard_from] = Route(heard_from, heard_from, self.default_quality, self.default_obs)
+        dest.neighbor_map[heard_from] = Route(heard_from, heard_from, heard_from,
+                                              self.default_quality, self.default_obs)
         self.destinations[heard_from] = dest
 
         for destination in nodes.destinations:
@@ -154,12 +164,13 @@ class RoutingTable:
                 # Otherwise compute this route's quality based on the NET/ROM spec
                 route_quality = (destination.quality * neighbor.quality + 128.) / 256.
 
-            # Only add routes which are above the minimum quality to begin with
+            # Only add routes which are above the minimum quality to begin with TODO check this logic
             if route_quality > self.min_quality:
                 new_dest = self.destinations.get(
                     destination.dest_node, Destination(destination.dest_node, destination.dest_alias))
                 new_route = new_dest.neighbor_map.get(
-                    neighbor.call, Route(destination.dest_node, destination.best_neighbor, route_quality, self.default_obs))
+                    neighbor.call, Route(neighbor.call, destination.dest_node, destination.best_neighbor,
+                                         route_quality, self.default_obs))
                 new_route.quality = route_quality
                 new_route.obsolescence = self.default_obs
                 new_dest.neighbor_map[neighbor.call] = new_route
@@ -244,6 +255,15 @@ class NetRomNetwork(NetRom, L3Handler):
         self.route_lock = Lock()
         asyncio.get_event_loop().create_task(self._broadcast_nodes())
 
+    async def start(self):
+        while True:
+            await self._loop()
+
+    async def _loop(self):
+        packet = await self.queue.get()
+        if packet:
+            self.queue.task_done()
+
     def maybe_handle_special(self, packet: AX25Packet) -> bool:
         if type(packet) == UIFrame:
             ui = cast(UIFrame, packet)
@@ -255,17 +275,23 @@ class NetRomNetwork(NetRom, L3Handler):
                 return False
         return True
 
-    def handle(self, port: int, remote_call: AX25Call, data: bytes):
-        netrom_packet = parse_netrom_packet(data)
-        print(f"NET/ROM: {netrom_packet}")
+    def local_call(self) -> AX25Call:
+        return AX25Call.parse(self.config.node_call())
 
+    async def _handle_async(self, netrom_packet: NetRomPacket):
         # If packet is for us, handle it, otherwise route it
         if netrom_packet.dest == AX25Call.parse(self.config.node_call()):
+            print(f"NET/ROM handling: {netrom_packet}")
             self.sm.handle_packet(netrom_packet)
         else:
+            print(f"NET/ROM forwarding: {netrom_packet}")
             self.write_packet(netrom_packet)
 
-    def nl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
+    def handle(self, port: int, remote_call: AX25Call, data: bytes):
+        netrom_packet = parse_netrom_packet(data)
+        asyncio.create_task(self._handle_async(netrom_packet))
+
+    def nl_data(self, remote_call: AX25Call, local_call: AX25Call, data: bytes):
         print(f"NL got data: {str(data)}")
 
     def nl_connect(self, remote_call: AX25Call, local_call: AX25Call):
@@ -276,10 +302,10 @@ class NetRomNetwork(NetRom, L3Handler):
 
     def write_packet(self, packet: NetRomPacket) -> bool:
         possible_routes = self.router.route(packet)
-
         routed = False
         for route in possible_routes:
             neighbor = self.router.neighbors.get(route)
+            print(f"Trying route {route} to neighbor {neighbor}")
             data_link = self.data_links.get(neighbor.port)
             try:
                 event = AX25StateEvent.dl_data(neighbor.call, L3Protocol.NetRom, packet.buffer)
@@ -305,6 +331,7 @@ class NetRomNetwork(NetRom, L3Handler):
             print(f"Got Nodes\n{nodes}")
             self.router.update_routes(heard_from, 0, nodes)
             print(f"New routing table\n{self.router}")
+        await asyncio.sleep(10)
 
     async def _broadcast_nodes(self):
         await asyncio.sleep(10)  # initial delay
@@ -318,4 +345,3 @@ class NetRomNetwork(NetRom, L3Handler):
                     dl.write_packet(nodes_packet)
                     await asyncio.sleep(0.030)
             await asyncio.sleep(self.config.nodes_interval())
-

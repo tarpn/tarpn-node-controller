@@ -1,5 +1,19 @@
 from setuptools import setup, find_packages
 
+
+EXTRA_REQUIRES = dict(
+    develop=[
+        # Linting, according to PEP8
+        'flake8==3.8.3',
+
+        # Type checker
+        'mypy==0.780',
+
+        # Testing
+        'pytest==6.0.1',
+        'pytest-runner==5.2'
+    ]
+)
 setup(
     name='tarpn',
     version='',
@@ -25,13 +39,5 @@ setup(
         'pyserial==3.4',
         'pyserial-asyncio==0.4'
     ],
-    setup_requires=[
-        # Linting, according to PEP8
-        'flake8==3.8.3',
-
-        # Type checker
-        'mypy==0.780',
-        'pytest-runner'
-    ],
-    tests_requires=['pytest']
+    extra_requires=EXTRA_REQUIRES
 )

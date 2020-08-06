@@ -1,0 +1,55 @@
+{
+  "nodeCall": "K4DBZ-2",
+  "nodeAlias": "DAVID",
+  "createdAt": "2020-06-18T10:21:59.591050",
+  "destinations": [
+    {
+      "nodeCall": "N3LTV-2",
+      "nodeAlias": "DOUG",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 122
+    },
+    {
+      "nodeCall": "W4EIP-2",
+      "nodeAlias": "DAVE",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 95
+    },
+    {
+      "nodeCall": "KM4EP-2",
+      "nodeAlias": "JAY",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 122
+    },
+    {
+      "nodeCall": "KW4KZ-2",
+      "nodeAlias": "ANOIA",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 95
+    },
+    {
+      "nodeCall": "KA2DEW-3",
+      "nodeAlias": "FFVC",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 122
+    },
+    {
+      "nodeCall": "K4FD-2",
+      "nodeAlias": "DAN",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 95
+    },
+    {
+      "nodeCall": "KM4IFU-2",
+      "nodeAlias": "ERECH",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 156
+    },
+    {
+      "nodeCall": "K4IPO-2",
+      "nodeAlias": "GREG",
+      "bestNeighbor": "KN4ORB-2",
+      "quality": 95
+    }
+  ]
+}

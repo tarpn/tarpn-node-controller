@@ -42,22 +42,20 @@ class DataLink(AX25):
                 packet = decode_ax25_packet(frame.data)
 
                 # Check if this is a special L3 message
-                l3_handled = False
+                should_continue = True
                 for l3 in self.l3.values():
                     should_continue = l3.maybe_handle_special(packet)
                     if not should_continue:
                         break
 
                 # If it has not been handled by L3
-                if not l3_handled:
+                if should_continue:
                     if not packet.dest == self.link_call:
                         print(f"Discarding packet not for us {packet}. We are {self.link_call}")
                         return
                     self.state_machine.handle_packet(packet)
             finally:
                 self.inbound.task_done()
-        # Give any async operations a chance to run
-        await asyncio.gather()
 
     def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
         def inner(data: bytes):

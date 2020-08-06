@@ -1,6 +1,6 @@
 from typing import Callable
 
-from tarpn.ax25 import AX25Call
+from tarpn.ax25 import AX25Call, AX25
 
 
 class Context:
@@ -41,7 +41,7 @@ class Logger(Application):
         print(f"Disconnected from {context.remote_address()}")
 
     def on_error(self, context: Context, error: str):
-        print(f"Error: {error}")
+        print(f"Error: {error} {AX25.error_message(error)}")
 
     def read(self, context: Context, data: bytes):
         print("Got: " + data.decode("ASCII"))
@@ -55,7 +55,7 @@ class Echo(Application):
         print(f"ECHO Disconnected from {context.remote_address()}")
 
     def on_error(self, context: Context, error: str):
-        print(f"ECHO Error: {error}")
+        print(f"ECHO Error: {error} {AX25.error_message(error)}")
 
     def read(self, context: Context, data: bytes):
         print("ECHO Got: " + data.decode("ASCII"))

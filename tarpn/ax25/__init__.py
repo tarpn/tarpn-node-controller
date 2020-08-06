@@ -347,6 +347,32 @@ def decode_ax25_packet(buffer: bytes):
 
 
 class AX25:
+    errors = {
+        "A": "F=1 received but P=1 not outstanding",
+        "B": "Unexpected DM with F=1 in states 3, 4 or 5",
+        "C": "Unexpected UA in states 3, 4 or 5",
+        "D": "UA received without F=1 when SABM or DISC was sent P=1",
+        "E": "DM received in states 3, 4 or 5",
+        "F": "Data link reset; i.e., SABM received in state 3, 4 or 5",
+        "I": "N2 timeouts: unacknowledged data",
+        "J": "N(r) sequence error",
+        "L": "Control field invalid or not implemented",
+        "M": "Information field was received in a U- or S-type frame",
+        "N": "Length of frame incorrect for frame type",
+        "O": "I frame exceeded maximum allowed length",
+        "P": "N(s) out of the window",
+        "Q": "UI response received, or UI command with P=1 received",
+        "R": "UI frame exceeded maximum allowed length",
+        "S": "I response received",
+        "T": "N2 timeouts: no response to enquiry",
+        "U": "N2 timeouts: extended peer busy condition",
+        "V": "No DL machines available to establish connection"
+    }
+
+    @staticmethod
+    def error_message(code: str) -> str:
+        return AX25.errors.get(code, f"Unknown code {code}")
+
     def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code):
         raise NotImplemented
 

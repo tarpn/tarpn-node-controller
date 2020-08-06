@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, cast, Dict, Optional
 
-from asyncio import Future
-
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
     L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25
 from tarpn.util import Timer
@@ -142,7 +140,6 @@ class AX25State:
     pending_frames: queue.Queue = queue.Queue()
     sent_frames: Dict[int, IFrame] = field(default_factory=dict)
     srt: int = 1000
-    ack_timer: Future = None
     reject_exception: bool = False
     layer_3: bool = False
     # TODO other fields
@@ -223,18 +220,11 @@ class AX25State:
         return self.vs % 8 == self.va
 
     def enqueue_info_ack(self, ax25: AX25):
-        if self.ack_timer is None:
-            self.ack_timer = asyncio.ensure_future(self.send_info_ack(ax25))
-            self.ack_pending = True
-
-    async def send_info_ack(self, ax25: AX25):
-        await asyncio.sleep(0.040)
-        if self.ack_pending:
-            rr = SFrame.s_frame(self.remote_call, self.local_call, [], SupervisoryCommand.Response,
-                                SupervisoryType.RR,
-                                self.get_recv_state(), True)
-            ax25.write_packet(rr)
-            self.ack_pending = False
+        rr = SFrame.s_frame(self.remote_call, self.local_call, [], SupervisoryCommand.Response,
+                            SupervisoryType.RR,
+                            self.get_recv_state(), True)
+        ax25.write_packet(rr)
+        self.ack_pending = False
 
 
 def check_ui(ui_frame: UIFrame, ax25: AX25):
@@ -520,10 +510,18 @@ def connected_handler(
         print(f"Pending iframe: {pending}")
         if state.window_exceeded():
             print("Delaying frame")
-            asyncio.ensure_future(delay_outgoing_data(state, pending))
+            asyncio.create_task(delay_outgoing_data(state, pending))
         else:
-            i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
-                                     state.get_send_state(), state.get_recv_state(), pending.protocol, pending.info)
+            i_frame = IFrame.i_frame(
+                dest=state.remote_call,
+                source=state.local_call,
+                repeaters=[],
+                command=SupervisoryCommand.Command,
+                poll=True,  # Ensure we get RR from other end
+                receive_seq_number=state.get_recv_state(),
+                send_seq_number=state.get_send_state(),
+                protocol=pending.protocol,
+                info=pending.info)
             ax25.write_packet(i_frame)
             state.sent_frames[state.get_send_state()] = i_frame
             state.vs += 1
@@ -596,6 +594,7 @@ def connected_handler(
             return AX25StateType.Connected
         else:
             print("N(R) error recovery, re-establishing connection")
+            print(state)
             nr_error_recovery(state, ax25)
             return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_INFO:
@@ -606,10 +605,11 @@ def connected_handler(
                 if i_frame.send_seq_number == state.get_recv_state():
                     state.inc_recv_state()
                     state.reject_exception = False
-                    ax25.dl_data(state.remote_call, state.local_call, i_frame.protocol, i_frame.info)
                     if i_frame.poll:
                         # Set N(R) = V(R)
                         state.enqueue_info_ack(ax25)
+                    # This should be before the info ack in theory
+                    ax25.dl_data(state.remote_call, state.local_call, i_frame.protocol, i_frame.info)
                 else:
                     if state.reject_exception:
                         if i_frame.poll:
@@ -624,6 +624,8 @@ def connected_handler(
                         ax25.write_packet(rej)
                 return AX25StateType.Connected
             else:
+                print("N(R) error recovery, re-establishing connection")
+                print(state)
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:

@@ -3,6 +3,7 @@ venv
 /tarpn/main.py
 
 *.egg-info
+.eggs
 
 __pycache__
 
