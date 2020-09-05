@@ -2,6 +2,7 @@ import configparser
 import re
 import sys
 import os
+from typing import Optional
 
 _default_settings = {
     "node": {
@@ -38,10 +39,10 @@ def _default_basedir(app_name):
 
 
 class Settings:
-    def __init__(self, basedir=None):
+    def __init__(self, basedir=None, path="config.ini"):
         self._init_basedir(basedir)
-        self._configfile = os.path.join(self._basedir, "config.ini")
-        self._config: configparser.ConfigParser = None
+        self._configfile = os.path.join(self._basedir, path)
+        self._config: Optional[configparser.ConfigParser] = None
         self.load()
 
     def _init_basedir(self, basedir):
@@ -76,9 +77,11 @@ class Settings:
             m = re.match(r"port:(\d)", section)
             if m:
                 ports.append(int(m.group(1)))
+        port_configs = []
         for port in ports:
             port_sect = self._config[f"port:{port}"]
-            PortConfig.from_dict(port, port_sect)
+            port_configs.append(PortConfig.from_dict(port, port_sect))
+        return port_configs
 
     def network_configs(self):
         return NetworkConfig(self._config["network"])
@@ -88,6 +91,9 @@ class Config:
     def __init__(self, section_name, config_section):
         self._section = section_name
         self._config_section = config_section
+
+    def __repr__(self) -> str:
+        return f"{self._section}: {dict(self._config_section)}"
 
     def get(self, key, default: str = None):
         value = self._config_section.get(key)
@@ -127,7 +133,7 @@ class NodeConfig(Config):
 
 class PortConfig(Config):
     def __init__(self, port_id, port_config):
-        super().__init__("port", port_config)
+        super().__init__(f"port:{port_id}", port_config)
         self._port_id = port_id
 
     def port_id(self):

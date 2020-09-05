@@ -87,6 +87,8 @@ class NetRomCircuit:
     ack_pending: bool = False
     state: NetRomStateType = NetRomStateType.Disconnected
 
+    more: bytes = bytearray()
+
     @classmethod
     def create(cls, circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
         # TODO how to generate new circuit ids and idx?
@@ -118,6 +120,7 @@ class NetRomCircuit:
                 7,  # TODO configure
                 self.remote_circuit_idx,
                 self.remote_circuit_id,
+                0,  # Unused
                 self.recv_state(),
                 OpType.InformationAcknowledge.as_op_byte(False, False, False)  # or F, T, F ?
             )
@@ -148,7 +151,7 @@ def disconnected_handler(
         circuit.remote_circuit_id = connect_req.circuit_id
         circuit.remote_circuit_idx = connect_req.circuit_idx
         if netrom.write_packet(connect_ack):
-            netrom.nl_connect(circuit.remote_call, circuit.local_call)
+            netrom.nl_connect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Connected
         else:
             return NetRomStateType.Disconnected
@@ -207,7 +210,7 @@ def awaiting_connection_handler(
             circuit.remote_circuit_idx = ack.rx_seq_num
             circuit.remote_circuit_id = ack.tx_seq_num
             circuit.window_size = ack.accept_window_size
-            netrom.nl_connect(circuit.remote_call, circuit.local_call)
+            netrom.nl_connect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Connected
         else:
             print("Unexpected circuit id in connection ack")
@@ -222,6 +225,9 @@ def awaiting_connection_handler(
             7,  # TODO configure TTL
             circuit.circuit_idx,
             circuit.circuit_id,
+            0,  # Unused
+            0,  # Unused
+            OpType.ConnectRequest.as_op_byte(False, False, False),
             2,  # TODO get this from config
             circuit.local_call,  # Origin user
             circuit.local_call  # Origin node
@@ -255,7 +261,7 @@ def connected_handler(
                 connect_req.proposed_window_size
             )
             netrom.write_packet(connect_ack)
-            netrom.nl_connect(circuit.remote_call, circuit.local_call)
+            netrom.nl_connect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Connected
         else:
             # Reject this and disconnect
@@ -272,7 +278,7 @@ def connected_handler(
                 connect_req.proposed_window_size
             )
             netrom.write_packet(connect_rej)
-            netrom.nl_disconnect(circuit.remote_call, circuit.local_call)
+            netrom.nl_disconnect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NETROM_CONNECT_ACK:
         connect_ack = cast(NetRomConnectAck, event.packet)
@@ -280,7 +286,7 @@ def connected_handler(
                 connect_ack.rx_seq_num == circuit.remote_circuit_id and \
                 connect_ack.circuit_idx == circuit.circuit_idx and \
                 connect_ack.circuit_id == circuit.circuit_id:
-            netrom.nl_connect(circuit.remote_call, circuit.local_call)
+            netrom.nl_connect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Connected
         else:
             #  TODO what now?
@@ -297,7 +303,7 @@ def connected_handler(
             OpType.DisconnectAcknowledge.as_op_byte(False, False, False)
         )
         netrom.write_packet(disc_ack)
-        netrom.nl_disconnect(circuit.remote_call, circuit.local_call)
+        netrom.nl_disconnect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
         return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NETROM_DISCONNECT_ACK:
         print("Unexpected disconnect ack in connected state!")
@@ -308,8 +314,11 @@ def connected_handler(
         if info.tx_seq_num == circuit.recv_state():
             circuit.inc_recv_state()
             circuit.enqueue_info_ack(netrom)
-            # TODO pass more-follows flag along here, indicates fragmentation
-            netrom.nl_data(circuit.remote_call, circuit.local_call, info.info)
+            circuit.more += info.info
+            if not info.more_follows():
+                # TODO expire old more-follows data
+                netrom.nl_data(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call, info.info)
+                circuit.more = bytearray()
         else:
             nak = NetRomPacket(
                 info.origin,
@@ -359,9 +368,12 @@ def connected_handler(
             7,  # TODO configure TTL
             circuit.circuit_idx,
             circuit.circuit_id,
+            0,  # Unused
+            0,  # Unused
+            OpType.ConnectRequest.as_op_byte(False, False, False),
             2,  # TODO get this from config
             circuit.local_call,  # Origin user
-            circuit.local_call  # Origin node
+            circuit.local_call,  # Origin node
         )
         netrom.write_packet(conn)
         return NetRomStateType.AwaitingConnection
@@ -386,6 +398,7 @@ def connected_handler(
             circuit.remote_circuit_id,
             circuit.send_state(),
             circuit.recv_state(),
+            OpType.Information.as_op_byte(False, False, False),
             event.data
         )
         netrom.write_packet(info)
@@ -401,7 +414,7 @@ def awaiting_release_handler(circuit: NetRomCircuit,
 
     if event.event_type == NetRomEventType.NETROM_DISCONNECT:
         if event.packet.circuit_idx == circuit.circuit_idx and event.packet.circuit_id == circuit.circuit_id:
-            netrom.nl_disconnect(circuit.remote_call, circuit.local_call)
+            netrom.nl_disconnect(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
             return NetRomStateType.Disconnected
         else:
             print("Invalid disconnect ack. Disconnecting anyways")
@@ -439,12 +452,12 @@ class NetRomStateMachine:
                 #  TODO also check last used time
                 to_reap.append(circuit_key)
         for circuit_key in to_reap:
-            print(f"Reaping unused circuit {circuit_key}")
+            print(f"Reaping disconnected circuit {circuit_key}")
             del self._circuits[circuit_key]
 
     def _get_or_create_circuit(self, netrom_packet: NetRomPacket) -> NetRomCircuit:
         if isinstance(netrom_packet, NetRomConnectRequest):
-            self._reap_unused_circuits()
+            #  self._reap_unused_circuits()
             next_circuit_id = self._next_circuit_id()
             if next_circuit_id == -1:
                 return None  # TODO handle this case
@@ -467,9 +480,22 @@ class NetRomStateMachine:
                 self._circuits[circuit_key] = circuit
         return circuit
 
+    def _get_circuit(self, circuit_idx: int, circuit_id: int) -> NetRomCircuit:
+        circuit_key = f"{circuit_idx:02d}:{circuit_id:02d}"
+        circuit = self._circuits[circuit_key]
+        return circuit
+
     def handle_packet(self, packet: NetRomPacket):
         circuit = self._get_or_create_circuit(packet)
         event = NetRomStateEvent.from_packet(packet)
+        handler = self._handlers[circuit.state]
+        if handler is None:
+            raise RuntimeError(f"No handler for state {handler}")
+        new_state = handler(circuit, event, self._netrom)
+        circuit.state = new_state
+
+    def handle_internal_event(self, event: NetRomStateEvent):
+        circuit = self._get_circuit(event.circuit_id, event.circuit_id)
         handler = self._handlers[circuit.state]
         if handler is None:
             raise RuntimeError(f"No handler for state {handler}")

@@ -1,7 +1,5 @@
 venv
 
-/tarpn/main.py
-
 *.egg-info
 .eggs
 

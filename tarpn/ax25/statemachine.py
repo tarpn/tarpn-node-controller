@@ -5,6 +5,7 @@ import asyncio
 import queue
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import partial
 from typing import Callable, cast, Dict, Optional
 
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
@@ -219,10 +220,10 @@ class AX25State:
     def check_send_eq_ack(self):
         return self.vs % 8 == self.va
 
-    def enqueue_info_ack(self, ax25: AX25):
+    def enqueue_info_ack(self, ax25: AX25, final=True):
         rr = SFrame.s_frame(self.remote_call, self.local_call, [], SupervisoryCommand.Response,
                             SupervisoryType.RR,
-                            self.get_recv_state(), True)
+                            self.get_recv_state(), final)
         ax25.write_packet(rr)
         self.ack_pending = False
 
@@ -253,9 +254,9 @@ def transmit_enquiry(state: AX25State, ax25: AX25):
     state.t1.start()
 
 
-def enquiry_response(state: AX25State, ax25: AX25):
+def enquiry_response(state: AX25State, ax25: AX25, final=True):
     rr = SFrame.s_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Response, SupervisoryType.RR,
-                        state.get_recv_state(), True)
+                        state.get_recv_state(), final)
     ax25.write_packet(rr)
     state.ack_pending = False
 
@@ -287,11 +288,10 @@ async def delay_outgoing_data(state: AX25State, pending: InternalInfo):
 
 
 def check_need_for_response(state: AX25State, ax25: AX25, s_frame: SFrame):
-    if s_frame.poll_final:
-        if s_frame.get_command() == SupervisoryCommand.Command:
-            enquiry_response(state, ax25)
-        elif s_frame.get_command() == SupervisoryCommand.Response:
-            ax25.dl_error(state.remote_call, state.local_call, "A")
+    if s_frame.get_command() and s_frame.poll_final:
+        enquiry_response(state, ax25)
+    elif s_frame.get_command() == SupervisoryCommand.Response and s_frame.poll_final:
+        ax25.dl_error(state.remote_call, state.local_call, "A")
 
 
 def nr_error_recovery(state: AX25State, ax25: AX25):
@@ -350,6 +350,7 @@ def disconnected_handler(
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_CONNECT:
         establish_data_link(state, ax25)
+        state.layer_3 = True
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_SABM:
         sabm_frame = cast(UIFrame, event.packet)
@@ -389,7 +390,7 @@ def awaiting_connection_handler(
     assert state.current_state == AX25StateType.AwaitingConnection
     print(f"in awaiting connection state, got: {event}")
     if event.event_type == AX25EventType.DL_CONNECT:
-        # TODO discard queue
+        state.clear_pending_iframes()
         state.layer_3 = True
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_SABM:
@@ -405,13 +406,14 @@ def awaiting_connection_handler(
         ax25.write_packet(dm)
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.DL_DATA:
-        # TODO if layer 3
-        pending = cast(InternalInfo, event.packet)
-        state.push_iframe(pending)
+        if not state.layer_3:
+            pending = cast(InternalInfo, event.packet)
+            state.push_iframe(pending)
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.IFRAME_READY:
-        pending = cast(InternalInfo, state.pending_frames.get())
-        asyncio.ensure_future(delay_outgoing_data(state, pending))
+        if not state.layer_3:
+            pending = cast(InternalInfo, state.pending_frames.get())
+            asyncio.ensure_future(delay_outgoing_data(state, pending))
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_UI:
         ui_frame = cast(UIFrame, event.packet)
@@ -517,7 +519,7 @@ def connected_handler(
                 source=state.local_call,
                 repeaters=[],
                 command=SupervisoryCommand.Command,
-                poll=True,  # Ensure we get RR from other end
+                poll=False,  # Ensure we get RR from other end
                 receive_seq_number=state.get_recv_state(),
                 send_seq_number=state.get_send_state(),
                 protocol=pending.protocol,
@@ -605,9 +607,7 @@ def connected_handler(
                 if i_frame.send_seq_number == state.get_recv_state():
                     state.inc_recv_state()
                     state.reject_exception = False
-                    if i_frame.poll:
-                        # Set N(R) = V(R)
-                        state.enqueue_info_ack(ax25)
+                    state.enqueue_info_ack(ax25, i_frame.poll)
                     # This should be before the info ack in theory
                     ax25.dl_data(state.remote_call, state.local_call, i_frame.protocol, i_frame.info)
                 else:
@@ -915,6 +915,40 @@ def awaiting_release_handler(
         return AX25StateType.AwaitingRelease
 
 
+class DeferredAX25(AX25):
+    def __init__(self, actual_ax25: AX25):
+        self.actual_ax25: AX25 = actual_ax25
+        self.calls = []
+
+    def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code):
+        #print("Deferring DL_ERROR")
+        self.calls.append(partial(self.actual_ax25.dl_error, remote_call, local_call, error_code))
+
+    def dl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
+        #print("Deferring DL_DATA")
+        self.calls.append(partial(self.actual_ax25.dl_data, remote_call, local_call, protocol, data))
+
+    def dl_connect(self, remote_call: AX25Call, local_call: AX25Call):
+        #print("Deferring DL_CONNECT")
+        self.calls.append(partial(self.actual_ax25.dl_connect, remote_call, local_call))
+
+    def dl_disconnect(self, remote_call: AX25Call, local_call: AX25Call):
+        #print("Deferring DL_DISCONNECT")
+        self.calls.append(partial(self.actual_ax25.dl_disconnect, remote_call, local_call))
+
+    def write_packet(self, packet: AX25Packet):
+        #print("Deferring write_packet")
+        self.calls.append(partial(self.actual_ax25.write_packet, packet))
+
+    def callsign(self):
+        return self.actual_ax25.callsign()
+
+    def apply(self):
+        #print(f"Running {len(self.calls)} deferred calls")
+        for deferred in self.calls:
+            deferred()
+
+
 class AX25StateMachine:
     """State management for AX.25 Data Links
 
@@ -946,15 +980,23 @@ class AX25StateMachine:
         handler = self._handlers[state.current_state]
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")
-        new_state = self._handlers[state.current_state](state, event, self._ax25)
+        deferred = DeferredAX25(self._ax25)
+        new_state = self._handlers[state.current_state](state, event, deferred)
         state.current_state = new_state
+        deferred.apply()
 
     def handle_internal_event(self, event: AX25StateEvent):
-        state = self._sessions.get(str(event.remote_call))
+        if event.event_type in (AX25EventType.DL_CONNECT, AX25EventType.DL_UNIT_DATA):
+            #  allow these events to create a new session
+            state = self._get_or_create_session(event.remote_call, self._ax25.callsign())
+        else:
+            state = self._sessions.get(str(event.remote_call))
         if not state:
             raise RuntimeError(f"No session for internal event {event}")
         handler = self._handlers[state.current_state]
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")
-        new_state = self._handlers[state.current_state](state, event, self._ax25)
+        deferred = DeferredAX25(self._ax25)
+        new_state = self._handlers[state.current_state](state, event, deferred)
         state.current_state = new_state
+        deferred.apply()

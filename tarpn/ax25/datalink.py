@@ -7,12 +7,16 @@ from tarpn.ax25.statemachine import AX25StateMachine, AX25StateEvent
 from tarpn.frame import L3Handler, DataLinkFrame
 
 
-class DataLink(AX25):
+class DataLinkManager(AX25):
     """
-    This accepts packets from one or more ports via the given queue. These are passed through
-    an AX.25 state machine which then emits outgoing packets or network events (such as DL_Connect).
+    In the AX.25 spec, this is the Link Multiplexer. It accepts packets from a single physical device and
+    manages Data Links for each connection. Packets are sent here via a provided queue. As packets are
+    processed, they may generate outgoing packets or L3 network events (such as DL_CONNECT).
 
-    This class also supports binding l2 applications and l3 handlers.
+    L2 applications may be bound to this class. This allows for simple point-to-point connected applications
+    such as SYSOP.
+
+    L3 handlers may be bound to this class. This allows for passing L3 network events to higher layers.
     """
     def __init__(self,
                  link_call: AX25Call,
@@ -32,6 +36,7 @@ class DataLink(AX25):
         self.l3: Dict[L3Protocol, L3Handler] = {}
 
     async def start(self):
+        print("Start")
         while True:
             await self._loop()
 
@@ -40,11 +45,17 @@ class DataLink(AX25):
         if frame:
             try:
                 packet = decode_ax25_packet(frame.data)
+            except Exception as err:
+                print(f"Had {err} parsing packet {frame}")
+                return
+            finally:
+                self.inbound.task_done()
 
+            try:
                 # Check if this is a special L3 message
                 should_continue = True
                 for l3 in self.l3.values():
-                    should_continue = l3.maybe_handle_special(packet)
+                    should_continue = l3.maybe_handle_special(frame.port, packet)
                     if not should_continue:
                         break
 
@@ -54,8 +65,8 @@ class DataLink(AX25):
                         print(f"Discarding packet not for us {packet}. We are {self.link_call}")
                         return
                     self.state_machine.handle_packet(packet)
-            finally:
-                self.inbound.task_done()
+            except Exception as err:
+                print(f"Had {err} parsing packet {packet}")
 
     def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
         def inner(data: bytes):
@@ -84,7 +95,7 @@ class DataLink(AX25):
             self._closer_partial(remote_call, local_call),
             remote_call
         )
-        self.default_app.on_error(context, error_code)
+        self.default_app.on_error(context, AX25.error_message(error_code))
 
     def dl_connect(self, remote_call: AX25Call, local_call: AX25Call):
         context = Context(
@@ -122,3 +133,6 @@ class DataLink(AX25):
         print(f"Sending out {packet}")
         frame = DataLinkFrame(self.link_port, packet.buffer, 0)
         asyncio.create_task(self.outbound.put(frame))
+
+    def callsign(self):
+        return self.link_call

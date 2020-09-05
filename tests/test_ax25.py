@@ -1,12 +1,11 @@
 import asyncio
 import unittest
-from typing import cast
 
 from tarpn.app import Logger, Context, Application
 from tarpn.ax25 import *
-from tarpn.ax25.datalink import DataLink
+from tarpn.ax25.datalink import DataLinkManager
 from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
-from tarpn.frame import DataLinkMultiplexer, DataLinkFrame
+from tarpn.frame import DataLinkMultiplexer
 from tarpn.port.kiss import decode_kiss_frame
 
 
@@ -57,7 +56,7 @@ class TestAX25(unittest.TestCase):
         out_queue = asyncio.Queue()
         dlm = DataLinkMultiplexer()
         dlm.add_port(0, out_queue)
-        ax25 = DataLink(AX25Call("K4DBZ", 1), 0, in_queue, out_queue, Logger())
+        ax25 = DataLinkManager(AX25Call("K4DBZ", 1), 0, in_queue, out_queue, Logger())
 
         # TODO don't do this here
         ax25.state_machine._get_or_create_session(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
@@ -72,12 +71,12 @@ class TestAX25(unittest.TestCase):
         # TEST-1
         in_queue_1 = asyncio.Queue()
         out_queue_1 = asyncio.Queue()
-        ax25_1 = DataLink(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, Logger())
+        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, Logger())
 
         # TEST-2
         in_queue_2 = asyncio.Queue()
         out_queue_2 = asyncio.Queue()
-        ax25_2 = DataLink(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, Logger())
+        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, Logger())
 
         # TEST-2 connecting to TEST-1
         dl_connect = AX25StateEvent.dl_connect(AX25Call("TEST", 1), AX25Call("TEST", 2))

@@ -59,6 +59,7 @@ class KISSProtocol(asyncio.Protocol):
         self.in_frame = False
 
     def connection_made(self, transport):
+        print(f"Connection made {transport}")
         self.transport = transport
         self.loop.create_task(self.start())
 
@@ -110,7 +111,7 @@ class KISSProtocol(asyncio.Protocol):
             kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
             kiss_data = encode_kiss_frame(kiss_frame, False)
             # print(f"Sending {kiss_data}")
-            self.transport.serial.write(kiss_data)
+            self.transport.write(kiss_data)
             self.outbound.task_done()
 
     def connection_lost(self, exc):

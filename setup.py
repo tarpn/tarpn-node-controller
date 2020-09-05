@@ -29,15 +29,17 @@ setup(
                  'tarpn-kiss-cat = tarpn.tools.kiss_cat:main',
                  'tarpn-packet-dump = tarpn.tools.packet_dump:main',
                  'tarpn-node = tarpn.main:main',
-                 'kiss-bench = tarpn.tools.kiss_bench:main'
+                 'kiss-bench = tarpn.tools.kiss_bench:main',
+                 'tarpn-tty = tarpn.tools.tty:main'
              ]},
+    data_files=[('config', ['sample.ini'])],
     python_requires='>=3.7',
     install_requires=[
         'appdirs==1.4.4',
         'asyncio==3.4.3',
         'hexdump==3.3',
         'pyserial==3.4',
-        'pyserial-asyncio==0.4'
+        'pyserial-asyncio==0.4',
     ],
     extra_requires=EXTRA_REQUIRES
 )

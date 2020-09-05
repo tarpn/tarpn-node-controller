@@ -48,3 +48,15 @@ def chunks(lst, n):
     else:
         for i in range(0, len(lst), n):
             yield lst[i:i + n]
+
+
+def load_plugins():
+    import pkg_resources
+
+    discovered_plugins = {
+        entry_point.name: entry_point.load()
+        for entry_point
+        in pkg_resources.iter_entry_points('tarpn.plugins')
+    }
+
+    print(discovered_plugins)

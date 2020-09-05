@@ -13,7 +13,7 @@ class OpType(IntFlag):
     Information = 0x05
     InformationAcknowledge = 0x06
 
-    def as_op_byte(self, choke: bool, nak: bool, more_follows: bool):
+    def as_op_byte(self, choke: bool, nak: bool, more_follows: bool) -> int:
         """Encode the flags with the opcode into the op byte"""
         return self | (int(choke) << 7) | (int(nak) << 6) | (int(more_follows) << 5)
 
@@ -162,13 +162,13 @@ class NetRom:
     def local_call(self) -> AX25Call:
         raise NotImplemented
 
-    def nl_data(self, remote_call: AX25Call, local_call: AX25Call, data: bytes) -> None:
+    def nl_data(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes) -> None:
         raise NotImplemented
 
-    def nl_connect(self, remote_call: AX25Call, local_call: AX25Call) -> None:
+    def nl_connect(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
         raise NotImplemented
 
-    def nl_disconnect(self, remote_call: AX25Call, local_call: AX25Call) -> None:
+    def nl_disconnect(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
         raise NotImplemented
 
     def write_packet(self, packet: NetRomPacket) -> bool:

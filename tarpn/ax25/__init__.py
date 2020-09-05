@@ -371,7 +371,10 @@ class AX25:
 
     @staticmethod
     def error_message(code: str) -> str:
-        return AX25.errors.get(code, f"Unknown code {code}")
+        if code in AX25.errors:
+            return f"{code} {AX25.errors.get(code)}"
+        else:
+            return f"Unknown code {code}"
 
     def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code):
         raise NotImplemented
@@ -386,4 +389,7 @@ class AX25:
         raise NotImplemented
 
     def write_packet(self, packet: AX25Packet):
+        raise NotImplemented
+
+    def callsign(self):
         raise NotImplemented

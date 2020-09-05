@@ -6,7 +6,7 @@ from tarpn.ax25 import AX25Packet, AX25Call
 
 
 class L3Handler:
-    def maybe_handle_special(self, packet: AX25Packet) -> bool:
+    def maybe_handle_special(self, port: int, packet: AX25Packet) -> bool:
         """
         Handle a special packet at L2
         :param packet:
