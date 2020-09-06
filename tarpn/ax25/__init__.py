@@ -112,6 +112,12 @@ class SFrame(AX25Packet):
     receive_seq_number: int
     control_type: SupervisoryType
 
+    def __repr__(self):
+        s = f"{self.control_type.name: <4} {self.source}>{self.dest} R={self.receive_seq_number}"
+        if self.poll_final:
+            s += " F"
+        return s
+
     @classmethod
     def s_frame(cls,
                 dest: AX25Call,
@@ -166,6 +172,15 @@ class UFrame(AX25Packet):
     poll_final: bool
     u_type: UnnumberedType
 
+    def __repr__(self):
+        s = f"{self.u_type.name: <4} {self.source}>{self.dest}"
+        if self.poll_final:
+            if self.get_command() == SupervisoryCommand.Command:
+                s += " P"
+            else:
+                s += " F"
+        return s
+
     @staticmethod
     def u_frame(dest: AX25Call,
                 source: AX25Call,
@@ -203,6 +218,12 @@ class UIFrame(UFrame):
     protocol: L3Protocol
     info: bytes
 
+    def printable_info(self):
+        return repr(self.info.decode("ASCII"))
+
+    def __repr__(self):
+        return f"UI   {self.source}>{self.dest} {self.protocol.name}: {self.printable_info()}"
+
     @staticmethod
     def ui_frame(dest: AX25Call,
                  source: AX25Call,
@@ -236,6 +257,13 @@ class IFrame(AX25Packet):
     send_seq_number: int
     protocol: L3Protocol
     info: bytes
+
+    def printable_info(self):
+        return repr(self.info.decode("ASCII"))
+
+    def __repr__(self):
+        return f"I    {self.source}>{self.dest} R={self.receive_seq_number} S={self.send_seq_number} {self.protocol.name}:" \
+               f" {self.printable_info()}"
 
     @staticmethod
     def i_frame(dest: AX25Call,

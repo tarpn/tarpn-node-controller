@@ -1,10 +1,15 @@
 import asyncio
+import logging
 from typing import Dict
 
 from tarpn.app import Application, Context
 from tarpn.ax25 import AX25Call, L3Protocol, decode_ax25_packet, AX25Packet, AX25
 from tarpn.ax25.statemachine import AX25StateMachine, AX25StateEvent
 from tarpn.frame import L3Handler, DataLinkFrame
+
+
+logger = logging.getLogger("ax25.datalink")
+packet_logger = logging.getLogger("ax25.packet")
 
 
 class DataLinkManager(AX25):
@@ -34,19 +39,24 @@ class DataLinkManager(AX25):
         self.state_machine = AX25StateMachine(self)
         self.default_app: Application = default_app
         self.l3: Dict[L3Protocol, L3Handler] = {}
+        self._stopped: bool = False
 
     async def start(self):
-        print("Start")
-        while True:
+        logger.info("Start DataLinkManager")
+        while not self._stopped:
             await self._loop()
+
+    def stop(self):
+        self._stopped = True
 
     async def _loop(self):
         frame = await self.inbound.get()
         if frame:
             try:
                 packet = decode_ax25_packet(frame.data)
+                packet_logger.info(f"< {packet}")
             except Exception as err:
-                print(f"Had {err} parsing packet {frame}")
+                logger.warning(f"Had {err} parsing packet {frame}")
                 return
             finally:
                 self.inbound.task_done()
@@ -62,11 +72,11 @@ class DataLinkManager(AX25):
                 # If it has not been handled by L3
                 if should_continue:
                     if not packet.dest == self.link_call:
-                        print(f"Discarding packet not for us {packet}. We are {self.link_call}")
+                        logger.warning(f"Discarding packet not for us {packet}. We are {self.link_call}")
                         return
                     self.state_machine.handle_packet(packet)
             except Exception as err:
-                print(f"Had {err} parsing packet {packet}")
+                logger.warning(f"Had {err} parsing packet {packet}")
 
     def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
         def inner(data: bytes):
@@ -127,10 +137,10 @@ class DataLinkManager(AX25):
             if l3:
                 l3.handle(self.link_port, remote_call, data)
             else:
-                print(f"No handler defined for protocol {protocol}. Discarding")
+                logger.warning(f"No handler defined for protocol {protocol}. Discarding")
 
     def write_packet(self, packet: AX25Packet):
-        print(f"Sending out {packet}")
+        packet_logger.info(f"> {packet}")
         frame = DataLinkFrame(self.link_port, packet.buffer, 0)
         asyncio.create_task(self.outbound.put(frame))
 

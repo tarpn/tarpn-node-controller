@@ -1,10 +1,14 @@
 from typing import NamedTuple, Callable
 from enum import IntEnum, unique
+import logging
 
 import asyncio
 
 from tarpn.frame import DataLinkFrame
 from tarpn.settings import PortConfig
+
+
+logger = logging.getLogger("kiss")
 
 
 @unique
@@ -59,7 +63,7 @@ class KISSProtocol(asyncio.Protocol):
         self.in_frame = False
 
     def connection_made(self, transport):
-        print(f"Connection made {transport}")
+        logger.info(f"Opened connection on {transport}")
         self.transport = transport
         self.loop.create_task(self.start())
 
@@ -70,6 +74,7 @@ class KISSProtocol(asyncio.Protocol):
             if b == KISSMagic.FEND:
                 if self.in_frame:
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
+                    logger.debug(f"Received {frame}")
                     if frame.command == KISSCommand.Data:
                         asyncio.ensure_future(self.inbound.put(
                             DataLinkFrame(self.port_config.port_id(), frame.data, frame.hdlc_port,
@@ -77,7 +82,7 @@ class KISSProtocol(asyncio.Protocol):
                     elif frame.command == KISSCommand.SetHardware:
                         self.on_hardware(frame)
                     else:
-                        print(f"Ignoring KISS frame {frame}")
+                        logger.warning(f"Ignoring KISS frame {frame}")
                     self.msgs_recvd += 1
                     self._buffer.clear()
                     self.in_frame = False
@@ -100,7 +105,7 @@ class KISSProtocol(asyncio.Protocol):
         """Accept a KISS frame and enqueue it for writing to the serial transport
         """
         data = encode_kiss_frame(frame, False)
-        print(f"Scheduling {data}")
+        logger.debug(f"Scheduling {data} for sending")
         asyncio.ensure_future(self.outbound.put(data))
 
     async def start(self):
@@ -110,12 +115,11 @@ class KISSProtocol(asyncio.Protocol):
                 break
             kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
             kiss_data = encode_kiss_frame(kiss_frame, False)
-            # print(f"Sending {kiss_data}")
             self.transport.write(kiss_data)
             self.outbound.task_done()
 
     def connection_lost(self, exc):
-        print('Reader closed')
+        logger.info(f"Closed connection on {self.transport}")
 
     def should_check_crc(self):
         return self.check_crc
@@ -194,7 +198,7 @@ def decode_kiss_frame(data, check_crc=False):
         if kiss_crc == crc:
             return KISSFrame(hdlc_port, kiss_command, decoded)
         else:
-            print("CRC failure")
+            logger.warning("CRC failure. Discarding frame")
             return None
     else:
         return KISSFrame(hdlc_port, kiss_command, decoded)

@@ -7,7 +7,7 @@ class Timer:
     def __init__(self, delay: float, cb: Callable[[], None]):
         """
         A resettable and cancelable timer class
-        :param delay: Delay in seconds
+        :param delay: Delay in milliseconds
         :param cb: A callback that takes no arguments
         """
         self.delay = delay
@@ -15,16 +15,20 @@ class Timer:
         self._started = 0
         self._timer: Optional[asyncio.TimerHandle] = None
 
+    def __repr__(self):
+        return f"Timer(delay={self.delay}, remaining={self.remaining()})"
+
     def start(self):
         if self._timer:
             self._timer.cancel()
-        self._timer = asyncio.get_event_loop().call_later(self.delay, self._run_cb)
+        self._started = time.time()
+        self._timer = asyncio.get_event_loop().call_later(self.delay / 1000., self._run_cb)
 
     def _run_cb(self):
-        try:
-            self._cb()
-        finally:
+        if self._timer:
+            # Callback might restart the timer, so clear the timer object first
             self._timer = None
+            self._cb()
 
     def cancel(self):
         if self._timer:
