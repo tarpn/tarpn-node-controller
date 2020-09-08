@@ -173,6 +173,8 @@ class AX25State:
         self.vr = 0
         self.va = 0
         self.rc = 0
+        self.srt = 1000
+        self.t1.delay = 1000
         self.t1.cancel()
         self.t3.cancel()
 
@@ -354,6 +356,7 @@ def disconnected_handler(
     elif event.event_type == AX25EventType.DL_DATA:
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_CONNECT:
+        state.reset()
         establish_data_link(state, ax25)
         state.layer_3 = True
         return AX25StateType.AwaitingConnection
@@ -364,7 +367,6 @@ def disconnected_handler(
         ax25.write_packet(ua_resp)
         state.reset()
         ax25.dl_connect(sabm_frame.source, sabm_frame.dest)
-        # TODO Set TIV (T initial value)
         state.t3.start()
         return AX25StateType.Connected
     elif event.event_type in (AX25EventType.AX25_RR, AX25EventType.AX25_RNR, AX25EventType.AX25_REJ,

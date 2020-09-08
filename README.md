@@ -13,13 +13,19 @@ Create a virtualenv, activate, and install deps (using Python 3)
 ```
 python3 -m venv venv
 source venv/bin/activate
-python setup.py develop
+pip install -e .[develop]
 ```
 
 Now some "tarpn-" scripts are in your path. E.g.,
 
 ```
 tarpn-packet-dump /tmp/vmodem0 9600
+```
+
+Run flake8
+
+```
+flake8 tarpn
 ```
 
 ## RaspberryPi Setup

@@ -41,5 +41,5 @@ setup(
         'pyserial==3.4',
         'pyserial-asyncio==0.4',
     ],
-    extra_requires=EXTRA_REQUIRES
+    extras_require=EXTRA_REQUIRES
 )
