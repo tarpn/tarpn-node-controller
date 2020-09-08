@@ -6,11 +6,14 @@ import sys
 from time import sleep
 
 from tarpn.app import Application, Context
-from tarpn.ax25 import AX25Call
+from tarpn.ax25 import AX25Call, L3Protocol
 from tarpn.ax25.datalink import DataLinkManager
 from tarpn.ax25.statemachine import AX25StateEvent
+from tarpn.main import IdHandler
+from tarpn.netrom.network import NetRomNetwork
+from tarpn.netrom.statemachine import NetRomStateEvent
 from tarpn.port import port_factory
-from tarpn.settings import PortConfig
+from tarpn.settings import PortConfig, NetworkConfig
 
 
 class TTY(Application):
@@ -31,14 +34,14 @@ class TTY(Application):
     def read(self, context: Context, data: bytes):
         sys.stdout.write(data.decode("ASCII"))
 
-    def handle_stdin(self, local_call, remote_call, dlm):
+    def handle_stdin(self, local_call, remote_call, nl):
         ready = sys.stdin.readline()
         if self.context:
             self.context.write(ready.encode("ASCII"))
         else:
             print(f"Connecting to {remote_call}")
-            dl_connect = AX25StateEvent.dl_connect(remote_call, local_call)
-            dlm.state_machine.handle_internal_event(dl_connect)
+            nl_connect = NetRomStateEvent.nl_connect(99, remote_call, local_call)
+            nl.sm.handle_internal_event(nl_connect)
 
 
 async def shutdown(loop):
@@ -85,8 +88,26 @@ def main():
 
     # Wire the port with an AX25 layer
     tty = TTY()
-    dlm = DataLinkManager(AX25Call.parse(args.local_call), port_config.port_id(), in_queue, out_queue, tty)
-    loop.add_reader(sys.stdin, tty.handle_stdin, AX25Call.parse(args.local_call), AX25Call.parse(args.remote_call), dlm)
+    dlm = DataLinkManager(AX25Call.parse(args.local_call), port_config.port_id(), in_queue, out_queue)
+
+    # Wire up the network
+    network_config = NetworkConfig.from_dict({
+        "netrom.node.call": args.local_call,
+        "netrom.node.alias": "TTY",
+        "netrom.ttl": 7,
+        "netrom.nodes.interval": 60,
+        "netrom.obs.init": 6,
+        "netrom.obs.min": 4,
+        "netrom.nodes.quality.min": 74
+    })
+    nl = NetRomNetwork(network_config)
+    nl.bind_data_link(0, dlm)
+    nl.bind_application(AX25Call.parse(args.local_call), "TTY", tty)
+    dlm.add_l3_handler(L3Protocol.NetRom, nl)
+    dlm.add_l3_handler(L3Protocol.NoLayer3, IdHandler())
+
+    # Setup the tty stdin reader
+    loop.add_reader(sys.stdin, tty.handle_stdin, AX25Call.parse(args.local_call), AX25Call.parse(args.remote_call), nl)
 
     # Configure logging
     packet_logger = logging.getLogger("ax25.packet")

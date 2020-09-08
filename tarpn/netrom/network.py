@@ -12,7 +12,7 @@ from asyncio import Lock
 from tarpn.app import Application, Context, Echo
 from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, parse_ax25_call, SupervisoryCommand
 from tarpn.ax25.datalink import DataLinkManager
-from tarpn.ax25.statemachine import AX25StateEvent
+from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
 from tarpn.frame import L3Handler
 from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet
 from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent
@@ -168,7 +168,7 @@ class RoutingTable:
             route_quality = 0
             if destination.best_neighbor in self.our_calls:
                 # Best neighbor is us, this is a "trivial loop", quality is zero
-                route_quality = 0
+                continue
             else:
                 # Otherwise compute this route's quality based on the NET/ROM spec
                 route_quality = (destination.quality * neighbor.quality + 128.) / 256.
@@ -179,13 +179,13 @@ class RoutingTable:
                     destination.dest_node, Destination(destination.dest_node, destination.dest_alias))
                 new_route = new_dest.neighbor_map.get(
                     neighbor.call, Route(neighbor.call, destination.dest_node, destination.best_neighbor,
-                                         route_quality, self.default_obs))
+                                         int(route_quality), self.default_obs))
                 new_route.quality = route_quality
                 new_route.obsolescence = self.default_obs
                 new_dest.neighbor_map[neighbor.call] = new_route
                 self.destinations[destination.dest_node] = new_dest
             else:
-                print(f"Saw new route for {neighbor.call}, but quality was too low")
+                print(f"Saw new route for {destination}, but quality was too low")
 
     def prune_routes(self) -> None:
         """
@@ -377,11 +377,20 @@ class NetRomNetwork(NetRom, L3Handler):
         self.router.bind_application(app_call, app_alias)
         self.l3_apps[app_call] = app
 
+    def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
+        data_link = self.data_links.get(port)
+        state = data_link.state_machine._get_or_create_session(remote_call, data_link.callsign())
+        if state.current_state == AX25StateType.Disconnected:
+            print(f"Opening data link to {remote_call}")
+            dl_connect = AX25StateEvent.dl_connect(remote_call, data_link.callsign())
+            data_link.state_machine.handle_internal_event(dl_connect)
+
     async def _update_nodes(self, heard_from: AX25Call, heard_on: int, nodes: NetRomNodes):
         async with self.route_lock:
-            print(f"Got Nodes\n{nodes}")
+            #  print(f"Got Nodes\n{nodes}")
             self.router.update_routes(heard_from, heard_on, nodes)
-            print(f"New routing table\n{self.router}")
+            self._maybe_open_data_link(heard_on, heard_from)
+            #  print(f"New routing table\n{self.router}")
         await asyncio.sleep(10)
 
     async def _broadcast_nodes(self):

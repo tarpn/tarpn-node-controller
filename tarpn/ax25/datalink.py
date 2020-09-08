@@ -28,7 +28,7 @@ class DataLinkManager(AX25):
                  link_port: int,
                  inbound: asyncio.Queue,
                  outbound: asyncio.Queue,
-                 default_app: Application):
+                 default_app: Application = Application()):
         """
         AX25 data-link layer
         """

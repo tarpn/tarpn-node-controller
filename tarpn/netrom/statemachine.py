@@ -51,7 +51,7 @@ class NetRomStateEvent:
     @classmethod
     def nl_connect(cls, circuit_id: int, dest: AX25Call, source: AX25Call):
         dummy = NetRomPacket.dummy(dest, source)
-        return NetRomStateEvent(circuit_id, source, NetRomEventType.NL_CONNECT, dummy)
+        return NetRomStateEvent(circuit_id, dest, NetRomEventType.NL_CONNECT, dummy)
 
     @classmethod
     def nl_data(cls, circuit_id: int, dest: AX25Call, data: bytes):
@@ -60,7 +60,7 @@ class NetRomStateEvent:
     @classmethod
     def nl_disconnect(cls, circuit_id: int, dest: AX25Call, source: AX25Call):
         dummy = NetRomPacket.dummy(dest, source)
-        return NetRomStateEvent(circuit_id, source, NetRomEventType.NL_DISCONNECT, dummy)
+        return NetRomStateEvent(circuit_id, dest, NetRomEventType.NL_DISCONNECT, dummy)
 
 
 class NetRomStateType(Enum):
@@ -495,7 +495,12 @@ class NetRomStateMachine:
         circuit.state = new_state
 
     def handle_internal_event(self, event: NetRomStateEvent):
-        circuit = self._get_circuit(event.circuit_id, event.circuit_id)
+        if event.event_type == NetRomEventType.NL_CONNECT:
+            circuit = NetRomCircuit(event.circuit_id, event.circuit_id, event.remote_call, self._netrom.local_call())
+            circuit_key = f"{circuit.circuit_idx:02d}:{circuit.circuit_id:02d}"
+            self._circuits[circuit_key] = circuit
+        else:
+            circuit = self._get_circuit(event.circuit_id, event.circuit_id)
         handler = self._handlers[circuit.state]
         if handler is None:
             raise RuntimeError(f"No handler for state {handler}")

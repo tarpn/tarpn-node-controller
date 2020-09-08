@@ -219,7 +219,7 @@ class UIFrame(UFrame):
     info: bytes
 
     def printable_info(self):
-        return repr(self.info.decode("ASCII"))
+        return repr(self.info)
 
     def __repr__(self):
         return f"UI   {self.source}>{self.dest} {self.protocol.name}: {self.printable_info()}"
@@ -259,7 +259,7 @@ class IFrame(AX25Packet):
     info: bytes
 
     def printable_info(self):
-        return repr(self.info.decode("ASCII"))
+        return repr(self.info)
 
     def __repr__(self):
         return f"I    {self.source}>{self.dest} R={self.receive_seq_number} S={self.send_seq_number} {self.protocol.name}:" \
