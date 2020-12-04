@@ -1,63 +1,114 @@
-from typing import Callable
+from asyncio.protocols import Protocol
+from typing import Optional
 
-from tarpn.ax25 import AX25Call, AX25
-
-
-class Context:
-    def __init__(self, writer: Callable[[bytes], None], closer: Callable[[], None], remote_call: AX25Call):
-        self.writer = writer
-        self.closer = closer
-        self.remote_call = remote_call
-
-    def write(self, data: bytes):
-        self.writer(data)
-
-    def close(self):
-        self.closer()
-
-    def remote_address(self) -> str:
-        return str(self.remote_call)
+from tarpn.ax25 import AX25Call, parse_ax25_call
+from tarpn.events import EventBus, EventListener
+from tarpn.netrom import NetRom
 
 
-class Application:
-    def on_connect(self, context: Context):
-        pass
+class AppProtocol:
+    def __init__(self):
+        self.transport = None
+        self.circuit_id = None
 
-    def on_disconnect(self, context: Context):
-        pass
+    def _on_data(self, my_circuit_id: int, remote_call: AX25Call, data: bytes, *args, **kwargs):
+        payload = bytearray()
+        payload.append(0x00)
+        payload.append(0x01)
+        remote_call.write(payload)
+        payload.append(len(data))
+        payload.extend(data)
+        self.transport.write(payload)
 
-    def on_error(self, context: Context, error: str):
-        pass
+    def _on_connect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        self.circuit_id = my_circuit_id
+        payload = bytearray()
+        payload.append(0x00)
+        payload.append(0x02)
+        remote_call.write(payload)
+        self.transport.write(payload)
 
-    def read(self, context: Context, data: bytes):
-        pass
-
-
-class Logger(Application):
-    def on_connect(self, context: Context):
-        print(f"Connected to {context.remote_address()}")
-
-    def on_disconnect(self, context: Context):
-        print(f"Disconnected from {context.remote_address()}")
-
-    def on_error(self, context: Context, error: str):
-        print(f"Error: {error} {AX25.error_message(error)}")
-
-    def read(self, context: Context, data: bytes):
-        print("Got: " + data.decode("ASCII"))
+    def _on_disconnect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        payload = bytearray()
+        payload.append(0x00)
+        payload.append(0x03)
+        remote_call.write(payload)
+        self.transport.write(payload)
 
 
-class Echo(Application):
-    def on_connect(self, context: Context):
-        print(f"ECHO Connected to {context.remote_address()}")
+class NetromAppProtocol(AppProtocol, Protocol):
+    """
+    This protocol runs inside the packet engine and is responsible for managing connections and passing
+    messages to the applications over the transport (unix domain socket, or possibly tcp socket)
+    """
+    def __init__(self, app_name: str, app_call: AX25Call, app_alias: str, network: NetRom):
+        super().__init__()
+        self.app_name = app_name
+        self.app_call = app_call
+        self.app_alias = app_alias
+        self.network = network
+        self.transport = None
 
-    def on_disconnect(self, context: Context):
-        print(f"ECHO Disconnected from {context.remote_address()}")
+    def data_received(self, data: bytes):
+        print("data from socket")
+        """
+        Receive an event from the application socket.
+        """
+        bytes_iter = iter(data)
+        proto_version = next(bytes_iter)
 
-    def on_error(self, context: Context, error: str):
-        print(f"ECHO Error: {error} {AX25.error_message(error)}")
+        if proto_version != 0x00:
+            raise RuntimeError(f"Unexpected app protocol version {proto_version}")
 
-    def read(self, context: Context, data: bytes):
-        print("ECHO Got: " + data.decode("ASCII"))
-        msg = "You said: " + data.decode("ASCII")
-        context.write(msg.encode("ASCII"))
+        message_type = next(bytes_iter)
+        if message_type == 0x01:  # data
+            remote_call = parse_ax25_call(bytes_iter)
+            data_len = next(bytes_iter)
+            data = bytes(bytes_iter)
+            if len(data) != data_len:
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
+            if self.circuit_id is not None:
+                self.network.nl_data_request(self.circuit_id, remote_call, self.app_call, data)
+            else:
+                self.transport.write("Not connected yet!\r\n".encode("ASCII"))
+        elif message_type == 0x02:  # connect
+            remote_call = parse_ax25_call(bytes_iter)
+            if next(bytes_iter, None):
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
+            self.network.nl_connect_request(remote_call, self.app_call)
+        elif message_type == 0x03:  # disconnect
+            remote_call = parse_ax25_call(bytes_iter)
+            if next(bytes_iter, None):
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
+            self.network.nl_disconnect_request(self.circuit_id, remote_call, self.app_call)
+        else:  # unknown
+            raise RuntimeError(f"Unknown message type {message_type}")
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        print("Connection to socket lost")
+        """Application disconnected from the socket... what now?"""
+        EventBus.remove(f"netrom_{self.app_call}_inbound")
+        EventBus.remove(f"netrom_{self.app_call}_connect")
+        EventBus.remove(f"netrom_{self.app_call}_disconnect")
+        self.transport = None
+
+    def connection_made(self, transport):
+        print("Connected to socket")
+        self.transport = transport
+        EventBus.bind(EventListener(
+            f"netrom.{self.app_call}.inbound",
+            f"netrom_{self.app_call}_inbound",
+            self._on_data
+        ))
+
+        EventBus.bind(EventListener(
+            f"netrom.{self.app_call}.connect",
+            f"netrom_{self.app_call}_connect",
+            self._on_connect
+        ))
+
+        EventBus.bind(EventListener(
+            f"netrom.{self.app_call}.disconnect",
+            f"netrom_{self.app_call}_disconnect",
+            self._on_disconnect
+        ))

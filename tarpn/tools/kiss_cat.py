@@ -18,7 +18,7 @@ async def async_main():
     loop = asyncio.get_event_loop()
     in_queue: asyncio.Queue = asyncio.Queue()
     out_queue: asyncio.Queue = asyncio.Queue()
-    protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, tnc_port=0, check_crc=False)
+    protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, port_id=1, check_crc=False)
     transport, protocol = await serial_asyncio.create_serial_connection(
         loop, protocol_factory, '/tmp/vmodem1', baudrate=115200)
     await asyncio.ensure_future(cat(sys.argv[1], protocol))

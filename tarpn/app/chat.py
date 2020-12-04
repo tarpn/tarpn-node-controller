@@ -3,18 +3,18 @@ import platform
 import sys
 from typing import Optional
 
-from tarpn.app import Application, Context
+from tarpn.app.runner import Context
 
 
-class ChatApplication(Application):
+class ChatApplication:
     """
     Two parts to this, the CHAT server and CHAT clients.
 
     The server is configured with a static list of neighbors to forward chat messages to.
-    It will send period keep-alive messages to its neighbors with the current BPQChatServer
+    It will send periodic keep-alive messages to its neighbors with the current BPQChatServer
     version (6.0.14.12).
 
-    CHAT clients can be any call sign, but only once instance of that call sign is supported
+    CHAT clients can be any call sign, but only one instance of that call sign is supported
     on the network at once. When joining, the server will send out a "join" request for the
     user that connected.
 
@@ -51,22 +51,30 @@ class ChatApplication(Application):
     """
     keep_alive_thread: Optional = None
 
-    def on_connect(self, context: Context):
-        print(f"CHAT: connected to {context.remote_call}")
+    def __init__(self, context: Context, environ, *args, **kwargs):
+        self.context = context
+        self.connected_chats = []
+        self.keep_alive_chats = []
+        asyncio.create_task(self._keep_alive())
 
-    async def _keep_alive(self, context: Context):
+    async def _keep_alive(self):
         await asyncio.sleep(3)  # Initial delay
         while True:
-            context.write(b"\x01KK4DBZ-10 K4DBZ-9 6.0.14.12\r")
+            for other_chat in self.keep_alive_chats:
+                self.context.write(other_chat, b"\x01KK4DBZ-10 K4DBZ-9 6.0.14.12\r")
             await asyncio.sleep(60)
 
-    def on_disconnect(self, context: Context):
-        print(f"CHAT: disconnected from {context.remote_call}")
+    def on_connect(self, address):
+        print(f"CHAT got connection from {address}")
+        self.connected_chats.append(address)
 
-    def on_error(self, context: Context, error: str):
-        print(f"CHAT: error {error} from {context.remote_call}")
+    def on_disconnect(self, address):
+        print(f"CHAT got disconnected from {address}")
+        self.connected_chats.remove(address)
+        self.keep_alive_chats.remove(address)
 
-    def read(self, context: Context, data: bytes):
+    def on_data(self, address, data):
+        print(f"CHAT got data from {address}: {repr(data)}")
         lines = data.split(b"\r")
         for line in lines:
             if len(line) == 0:
@@ -74,7 +82,7 @@ class ChatApplication(Application):
             if line == b"*RTL":
                 # Remote station trying to connect, need to reply
                 resp = b"[BPQChatServer-6.0.14.12]\rOK\r"
-                context.write(resp)
+                self.context.write(address, resp)
                 continue
             if line[0] == 1:
                 inst = chr(line[1])
@@ -87,9 +95,8 @@ class ChatApplication(Application):
                 elif inst == "J":
                     if rem.startswith(b"K4DBZ-9 K4DBZ"):
                         resp = b"\x01JK4DBZ-10 KM4NKU David from Python 3.7\r\x01TK4DBZ-10 KM4NKU General\r"
-                        context.write(resp)
-                        if not self.keep_alive_thread:
-                            self.keep_alive_thread = asyncio.create_task(self._keep_alive(context))
+                        self.context.write(address, resp)
+                        self.keep_alive_chats.append(address)
                     else:
                         msg = repr(rem)
                         print(f"CHAT join {msg}")
@@ -108,7 +115,7 @@ class ChatApplication(Application):
                                    f"{platform.machine()} {platform.release()}"
                     else:
                         resp_msg = f"SK4DBZ-10 {message_target} {message_user} Unknown command '{message}'"
-                    context.write(b"\x01" + resp_msg.encode("ASCII") + b"\r")
+                    self.context.write(address, b"\x01" + resp_msg.encode("ASCII") + b"\r")
 
                 else:
                     msg = repr(rem)

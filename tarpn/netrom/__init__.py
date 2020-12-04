@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from enum import IntFlag
+from typing import List
 
-from tarpn.ax25 import AX25Call, parse_ax25_call, L3Protocol
+from tarpn.ax25 import AX25Call, parse_ax25_call
 
 
 class OpType(IntFlag):
@@ -16,6 +17,17 @@ class OpType(IntFlag):
     def as_op_byte(self, choke: bool, nak: bool, more_follows: bool) -> int:
         """Encode the flags with the opcode into the op byte"""
         return self | (int(choke) << 7) | (int(nak) << 6) | (int(more_follows) << 5)
+
+    def __repr__(self):
+        return {
+            OpType.Unknown: "???????",
+            OpType.ConnectRequest: "ConnReq",
+            OpType.ConnectAcknowledge: "ConnAck",
+            OpType.DisconnectRequest: "DiscReq",
+            OpType.DisconnectAcknowledge: "DiscAck",
+            OpType.Information: "InfoReq",
+            OpType.InformationAcknowledge: "InfoAck"
+        }.get(self)
 
     @classmethod
     def create(cls, op_byte: int):
@@ -37,10 +49,6 @@ class NetRomPacket:
     rx_seq_num: int
     op_byte: int
 
-    @classmethod
-    def dummy(cls, dest: AX25Call, origin: AX25Call):
-        return NetRomPacket(dest, origin, 0, 0, 0, 0, 0, 0)
-
     @property
     def buffer(self) -> bytes:
         b = bytearray()
@@ -54,6 +62,16 @@ class NetRomPacket:
         b.append(self.op_byte)
         return bytes(b)
 
+    def __repr__(self):
+        out = f"{repr(self.op_type())} {self.origin}>{self.dest} C={self.circuit_id} RX={self.rx_seq_num} TX={self.tx_seq_num} TTL={self.ttl}"
+        if self.choke():
+            out += " CHOKE"
+        if self.nak():
+            out += " NAK"
+        if self.more_follows():
+            out += " MORE"
+        return out
+
     def op_type(self):
         return OpType.create(self.op_byte)
 
@@ -66,12 +84,26 @@ class NetRomPacket:
     def more_follows(self):
         return (self.op_byte & 0x20) == 0x20
 
+    @classmethod
+    def dummy(cls, dest: AX25Call, origin: AX25Call):
+        return NetRomPacket(dest, origin, 0, 0, 0, 0, 0, 0)
+
 
 @dataclass
 class NetRomConnectRequest(NetRomPacket):
     proposed_window_size: int
     origin_user: AX25Call
     origin_node: AX25Call
+
+    def __repr__(self):
+        out = f"{repr(self.op_type())} {self.origin}>{self.dest} C={self.circuit_id} RX={self.rx_seq_num} TX={self.tx_seq_num} TTL={self.ttl}"
+        if self.choke():
+            out += " CHOKE"
+        if self.nak():
+            out += " NAK"
+        if self.more_follows():
+            out += " MORE"
+        return out
 
     @property
     def buffer(self) -> bytes:
@@ -94,6 +126,16 @@ class NetRomConnectRequest(NetRomPacket):
 class NetRomConnectAck(NetRomPacket):
     accept_window_size: int
 
+    def __repr__(self):
+        out = f"{repr(self.op_type())} {self.origin}>{self.dest} C={self.circuit_id} RX={self.rx_seq_num} TX={self.tx_seq_num} TTL={self.ttl}"
+        if self.choke():
+            out += " CHOKE"
+        if self.nak():
+            out += " NAK"
+        if self.more_follows():
+            out += " MORE"
+        return out
+
     @property
     def buffer(self) -> bytes:
         b = bytearray()
@@ -112,6 +154,16 @@ class NetRomConnectAck(NetRomPacket):
 @dataclass
 class NetRomInfo(NetRomPacket):
     info: bytes
+
+    def __repr__(self):
+        out = f"{repr(self.op_type())} {self.origin}>{self.dest} C={self.circuit_id} RX={self.rx_seq_num} TX={self.tx_seq_num} TTL={self.ttl} {repr(self.info)}"
+        if self.choke():
+            out += " CHOKE"
+        if self.nak():
+            out += " NAK"
+        if self.more_follows():
+            out += " MORE"
+        return out
 
     @property
     def buffer(self) -> bytes:
@@ -162,13 +214,28 @@ class NetRom:
     def local_call(self) -> AX25Call:
         raise NotImplemented
 
-    def nl_data(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes) -> None:
+    def get_circuit_ids(self) -> List[int]:
         raise NotImplemented
 
-    def nl_connect(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
+    def get_circuit(self, circuit_id: int):
         raise NotImplemented
 
-    def nl_disconnect(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
+    def nl_data_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes) -> None:
+        raise NotImplemented
+
+    def nl_data_indication(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes) -> None:
+        raise NotImplemented
+
+    def nl_connect_request(self, remote_call: AX25Call, local_call: AX25Call) -> None:
+        raise NotImplemented
+
+    def nl_connect_indication(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
+        raise NotImplemented
+
+    def nl_disconnect_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
+        raise NotImplemented
+
+    def nl_disconnect_indication(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call) -> None:
         raise NotImplemented
 
     def write_packet(self, packet: NetRomPacket) -> bool:

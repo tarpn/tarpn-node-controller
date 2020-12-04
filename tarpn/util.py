@@ -64,3 +64,12 @@ def load_plugins():
     }
 
     print(discovered_plugins)
+
+
+def backoff(start_time, growth_factor, max_time):
+    """Infinite iterator of exponentially increasing backoff times"""
+    yield start_time
+    next_time = start_time
+    while True:
+        next_time = min(max_time, next_time * growth_factor)
+        yield next_time

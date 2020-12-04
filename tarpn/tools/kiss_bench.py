@@ -3,8 +3,8 @@ import asyncio
 import os
 import time
 
-from tarpn.frame import DataLinkFrame
-from tarpn.port import port_factory
+from tarpn.port import PortFrame
+from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import PortConfig
 
 
@@ -12,7 +12,7 @@ async def produce(count, size, queue):
     out = []
     for i in range(count):
         data = os.urandom(32)
-        dl_frame = DataLinkFrame(1, data, 0)
+        dl_frame = PortFrame(1, data, 0)
         out.append(dl_frame)
         await asyncio.create_task(queue.put(dl_frame))
     print("Done sending")
@@ -58,11 +58,11 @@ async def async_main():
     })
     in_queue_1: asyncio.Queue = asyncio.Queue()
     out_queue_1: asyncio.Queue = asyncio.Queue()
-    await port_factory(in_queue_1, out_queue_1, port_1)
+    await kiss_port_factory(in_queue_1, out_queue_1, port_1)
 
     in_queue_2: asyncio.Queue = asyncio.Queue()
     out_queue_2: asyncio.Queue = asyncio.Queue()
-    await port_factory(in_queue_2, out_queue_2, port_2)
+    await kiss_port_factory(in_queue_2, out_queue_2, port_2)
 
     produce_coro = produce(args.count, args.size, out_queue_1)
     consume_coro = consume(args.count, in_queue_2)

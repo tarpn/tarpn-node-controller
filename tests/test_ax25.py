@@ -1,27 +1,11 @@
 import asyncio
 import unittest
 
-from tarpn.app import Logger, Context, Application
 from tarpn.ax25 import *
 from tarpn.ax25.datalink import DataLinkManager
-from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
-from tarpn.frame import DataLinkMultiplexer
+from tarpn.ax25.statemachine import AX25StateEvent
+from tarpn.ax25 import AX25StateType
 from tarpn.port.kiss import decode_kiss_frame
-
-
-class Echo(Application):
-    def on_connect(self, context: Context):
-        print(f"ECHO Connected to {context.remote_address()}")
-
-    def on_disconnect(self, context: Context):
-        print(f"ECHO Disconnected from {context.remote_address()}")
-
-    def on_error(self, context: Context, error: str):
-        print(f"ECHO Error: {error}")
-
-    def read(self, context: Context, data: bytes):
-        print("ECHO Got: " + data.decode("ASCII"))
-        context.write(data)
 
 
 class TestAX25(unittest.TestCase):
@@ -41,6 +25,7 @@ class TestAX25(unittest.TestCase):
         frame = decode_kiss_frame(data)
         packet = decode_ax25_packet(frame.data)
         print(packet)
+
         assert packet.protocol == L3Protocol.NetRom
         assert packet.dest == AX25Call("K4DBZ", 2)
         assert packet.source == AX25Call("K4DBZ", 1)
@@ -54,9 +39,7 @@ class TestAX25(unittest.TestCase):
     def test_connect(self):
         in_queue = asyncio.Queue()
         out_queue = asyncio.Queue()
-        dlm = DataLinkMultiplexer()
-        dlm.add_port(0, out_queue)
-        ax25 = DataLinkManager(AX25Call("K4DBZ", 1), 0, in_queue, out_queue, Logger())
+        ax25 = DataLinkManager(AX25Call("K4DBZ", 1), 0, in_queue, out_queue)
 
         # TODO don't do this here
         ax25.state_machine._get_or_create_session(AX25Call("K4DBZ", 2), AX25Call("K4DBZ", 1))
@@ -71,12 +54,12 @@ class TestAX25(unittest.TestCase):
         # TEST-1
         in_queue_1 = asyncio.Queue()
         out_queue_1 = asyncio.Queue()
-        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, Logger())
+        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1)
 
         # TEST-2
         in_queue_2 = asyncio.Queue()
         out_queue_2 = asyncio.Queue()
-        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, Logger())
+        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2)
 
         # TEST-2 connecting to TEST-1
         dl_connect = AX25StateEvent.dl_connect(AX25Call("TEST", 1), AX25Call("TEST", 2))

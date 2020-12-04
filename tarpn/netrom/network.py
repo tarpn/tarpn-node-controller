@@ -1,23 +1,25 @@
 import asyncio
 import datetime
 import json
+import logging
 import os
+from asyncio import Lock
 from dataclasses import dataclass, field
 from itertools import islice
 from operator import attrgetter
 from typing import Dict, List, cast, Iterator
 
-from asyncio import Lock
-
-from tarpn.app import Application, Context, Echo
-from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, parse_ax25_call, SupervisoryCommand
-from tarpn.ax25.datalink import DataLinkManager
-from tarpn.ax25.statemachine import AX25StateEvent, AX25StateType
-from tarpn.frame import L3Handler
+from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, parse_ax25_call, SupervisoryCommand, AX25StateType
+from tarpn.ax25.datalink import DataLinkManager, L3Handler
+from tarpn.events import EventBus, EventListener
 from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet
 from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent
 from tarpn.settings import NetworkConfig
 from tarpn.util import chunks
+
+
+logger = logging.getLogger("netrom.network")
+packet_logger = logging.getLogger("packet")
 
 
 @dataclass
@@ -41,6 +43,7 @@ class Destination:
     node_call: AX25Call
     node_alias: str
     neighbor_map: Dict[AX25Call, Route] = field(default_factory=dict)
+    freeze: bool = False
 
     def sorted_neighbors(self):
         return sorted(self.neighbor_map.values(), key=attrgetter("quality"), reverse=True)
@@ -106,10 +109,13 @@ class NetRomNodes:
 class RoutingTable:
     node_alias: str
     our_calls: List[AX25Call] = field(default_factory=list)
-    # Neighbors is a map of direct neighbors we have, who we have heard NODES from
+
+    # Neighbors is a map of direct neighbors we have, i.e., who we have heard NODES from
     neighbors: Dict[AX25Call, Neighbor] = field(default_factory=dict)
+
     # Destinations is the content of the NODES table, what routes exist to other nodes through which neighbors
     destinations: Dict[AX25Call, Destination] = field(default_factory=dict)
+
     # TODO config all these
     default_obs: int = 100
     default_quality: int = 255
@@ -145,7 +151,7 @@ class RoutingTable:
         app_routes = {}
         for our_call in self.our_calls:
             app_routes[our_call] = Route(our_call, app_call, our_call, 95, 100)
-        self.destinations[app_call] = Destination(app_call, app_alias, app_routes)
+        self.destinations[app_call] = Destination(app_call, app_alias, app_routes, True)
 
     def update_routes(self, heard_from: AX25Call, heard_on_port: int, nodes: NetRomNodes):
         """
@@ -185,7 +191,8 @@ class RoutingTable:
                 new_dest.neighbor_map[neighbor.call] = new_route
                 self.destinations[destination.dest_node] = new_dest
             else:
-                print(f"Saw new route for {destination}, but quality was too low")
+                # print(f"Saw new route for {destination}, but quality was too low")
+                pass
 
     def prune_routes(self) -> None:
         """
@@ -193,15 +200,18 @@ class RoutingTable:
 
         This method is not thread-safe.
         """
-        print("Pruning routes")
+        # print("Pruning routes")
         for call, destination in list(self.destinations.items()):
+            if destination.freeze:
+                # Don't prune frozen routes
+                continue
             for neighbor, route in list(destination.neighbor_map.items()):
                 route.obsolescence -= 1
                 if route.obsolescence <= 0:
-                    print(f"Removing {neighbor} from {destination} neighbor's list")
+                    # print(f"Removing {neighbor} from {destination} neighbor's list")
                     del destination.neighbor_map[neighbor]
             if len(destination.neighbor_map.keys()) == 0:
-                print(f"No more routes to {call}, removing from routing table")
+                # print(f"No more routes to {call}, removing from routing table")
                 del self.destinations[call]
                 if call in self.neighbors:
                     del self.neighbors[call]
@@ -215,12 +225,13 @@ class RoutingTable:
                     best_neighbor = neighbor
                     break
                 else:
-                    print(f"Not including {neighbor} in NODES, obsolescence below threshold")
+                    # print(f"Not including {neighbor} in NODES, obsolescence below threshold")
+                    pass
             if best_neighbor:
                 node_destinations.append(NodeDestination(destination.node_call, destination.node_alias,
                                                          best_neighbor.next_hop, best_neighbor.quality))
             else:
-                print(f"No good neighbor was found for {destination}")
+                logger.debug(f"No good neighbor was found for {destination}")
         return NetRomNodes(self.node_alias, node_destinations)
 
 
@@ -256,22 +267,18 @@ def encode_netrom_nodes(nodes: NetRomNodes) -> bytes:
 class NetRomNetwork(NetRom, L3Handler):
     def __init__(self, config: NetworkConfig):
         self.config = config
-        self.queue: asyncio.Queue = asyncio.Queue()
         self.sm = NetRomStateMachine(self)
         self.router = RoutingTable(config.node_alias())
-        self.l3_apps: Dict[AX25Call, Application] = {}
+        self.l3_apps: Dict[AX25Call, str] = {}
         self.data_links: Dict[int, DataLinkManager] = {}
         self.route_lock = Lock()
         asyncio.get_event_loop().create_task(self._broadcast_nodes())
 
     async def start(self):
-        while True:
-            await self._loop()
+        await self.sm.start()
 
-    async def _loop(self):
-        packet = await self.queue.get()
-        if packet:
-            self.queue.task_done()
+    def can_handle(self, protocol: L3Protocol) -> bool:
+        return protocol == L3Protocol.NetRom
 
     def maybe_handle_special(self, port: int, packet: AX25Packet) -> bool:
         if type(packet) == UIFrame:
@@ -279,6 +286,7 @@ class NetRomNetwork(NetRom, L3Handler):
             if ui.protocol == L3Protocol.NetRom and ui.dest == AX25Call("NODES"):
                 # Parse this NODES packet and mark it as handled
                 nodes = parse_netrom_nodes(ui.info)
+                EventBus.emit("netrom.nodes", [nodes])
                 asyncio.get_event_loop().create_task(self._update_nodes(packet.source, port, nodes))
                 # Stop further processing
                 return False
@@ -289,108 +297,119 @@ class NetRomNetwork(NetRom, L3Handler):
 
     async def _handle_async(self, netrom_packet: NetRomPacket):
         # If packet is for us, handle it, otherwise route it
+        EventBus.emit("netrom.incoming", [netrom_packet])
+        packet_logger.info(f"L3 RX: {netrom_packet}")
+
         if netrom_packet.dest == AX25Call("KEEPLI-0"):
-            print(f"Got keep alive from {netrom_packet.origin}")
+            # print(f"Got keep alive from {netrom_packet.origin}")
+            pass
         elif netrom_packet.dest == AX25Call.parse(self.config.node_call()):
-            print(f"NET/ROM root handler: {netrom_packet}")
+            # print(f"NET/ROM root handler: {netrom_packet}")
             self.sm.handle_packet(netrom_packet)
-        elif netrom_packet.dest in self.l3_apps.keys():
-            print(f"NET/ROM app handler: {netrom_packet}")
+        elif netrom_packet.dest in self.l3_apps:
+            # print(f"NET/ROM app handler: {netrom_packet}")
             self.sm.handle_packet(netrom_packet)
         else:
-            print(f"NET/ROM forwarding: {netrom_packet}")
+            # print(f"NET/ROM forwarding: {netrom_packet}")
             self.write_packet(netrom_packet)
 
     def handle(self, port: int, remote_call: AX25Call, data: bytes):
-        netrom_packet = parse_netrom_packet(data)
-        asyncio.create_task(self._handle_async(netrom_packet))
+        try:
+            netrom_packet = parse_netrom_packet(data)
+            asyncio.create_task(self._handle_async(netrom_packet))
+            return True
+        except:
+            return False
 
-    def _writer_partial(self, my_circuit_idx: int, my_circuit_id: int, remote_call: AX25Call):
-        def inner(data: bytes):
-            event = NetRomStateEvent.nl_data(my_circuit_id, remote_call, data)
-            self.sm.handle_internal_event(event)
-        return inner
+    def get_circuit_ids(self) -> List[int]:
+        return self.sm.get_circuits()
 
-    def _closer_partial(self, my_circuit_idx: int, my_circuit_id: int,
-                        remote_call: AX25Call, local_call: AX25Call):
-        def inner():
-            event = NetRomStateEvent.nl_disconnect(my_circuit_id, remote_call, local_call)
-            self.sm.handle_internal_event(event)
+    def get_circuit(self, circuit_id: int):
+        return self.sm._get_circuit(circuit_id, circuit_id)  # TODO fix this
 
-        return inner
+    def nl_data_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes):
+        event = NetRomStateEvent.nl_data(my_circuit_id, remote_call, data)
+        self.sm.handle_internal_event(event)
 
-    def nl_data(self, my_circuit_idx: int, my_circuit_id: int,
-                remote_call: AX25Call, local_call: AX25Call, data: bytes):
-        # Called from state machine to dispatch to to applications
-        context = Context(
-            self._writer_partial(my_circuit_idx, my_circuit_id, remote_call),
-            self._closer_partial(my_circuit_idx, my_circuit_id, remote_call, local_call),
-            remote_call
-        )
-        self.l3_apps.get(local_call, Echo()).read(context, data)
+    def nl_data_indication(self, my_circuit_idx: int, my_circuit_id: int,
+                           remote_call: AX25Call, local_call: AX25Call, data: bytes):
+        # Called from the state machine to indicate data to higher layers
+        EventBus.emit(f"netrom.{local_call}.inbound", my_circuit_idx, remote_call, data)
 
-    def nl_connect(self, my_circuit_idx: int, my_circuit_id: int,
-                   remote_call: AX25Call, local_call: AX25Call):
-        context = Context(
-            self._writer_partial(my_circuit_idx, my_circuit_id, remote_call),
-            self._closer_partial(my_circuit_idx, my_circuit_id, remote_call, local_call),
-            remote_call
-        )
-        self.l3_apps.get(local_call, Echo()).on_connect(context)
+    def nl_connect_request(self, remote_call: AX25Call, local_call: AX25Call):
+        # circuit_id of -1 means pick an unused circuit to use
+        if remote_call == local_call:
+            raise RuntimeError(f"Cannot connect to node's own callsign {local_call}")
+        nl_connect = NetRomStateEvent.nl_connect(-1, remote_call, local_call)
+        self.sm.handle_internal_event(nl_connect)
 
-    def nl_disconnect(self, my_circuit_idx: int, my_circuit_id: int,
-                      remote_call: AX25Call, local_call: AX25Call):
-        context = Context(
-            self._writer_partial(my_circuit_idx, my_circuit_id, remote_call),
-            self._closer_partial(my_circuit_idx, my_circuit_id, remote_call, local_call),
-            remote_call
-        )
-        self.l3_apps.get(local_call, Echo()).on_disconnect(context)
+    def nl_connect_indication(self, my_circuit_idx: int, my_circuit_id: int,
+                              remote_call: AX25Call, local_call: AX25Call):
+        # Send a connect event
+        EventBus.emit(f"netrom.{local_call}.connect", my_circuit_idx, remote_call)
+
+    def nl_disconnect_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
+        event = NetRomStateEvent.nl_disconnect(my_circuit_id, remote_call, local_call)
+        self.sm.handle_internal_event(event)
+
+    def nl_disconnect_indication(self, my_circuit_idx: int, my_circuit_id: int,
+                                 remote_call: AX25Call, local_call: AX25Call):
+        EventBus.emit(f"netrom.{local_call}.disconnect", my_circuit_idx, remote_call)
+
+    # TODO error indication
 
     def write_packet(self, packet: NetRomPacket) -> bool:
         possible_routes = self.router.route(packet)
         routed = False
         for route in possible_routes:
             neighbor = self.router.neighbors.get(route)
-            print(f"Trying route {route} to neighbor {neighbor}")
+            #print(f"Trying route {route} to neighbor {neighbor}")
             data_link = self.data_links.get(neighbor.port)
             try:
-                event = AX25StateEvent.dl_data(neighbor.call, L3Protocol.NetRom, packet.buffer)
-                data_link.state_machine.handle_internal_event(event)
-                print(f"Routed {packet}")
+                data_link.dl_data_request(neighbor.call, L3Protocol.NetRom, packet.buffer)
+                #print(f"Routed {packet}")
                 routed = True
+                EventBus.emit("netrom.outbound", [packet])
+                packet_logger.info(f"L3 TX: {packet}")
                 break
             except Exception as e:
-                print(f"Had an error {e}")
+                #print(f"Had an error {e}")
                 pass
 
         if not routed:
-            print(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
+            logger.warning(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
+            pass
 
         return routed
 
-    def bind_data_link(self, port: int, data_link: DataLinkManager):
-        self.data_links[port] = data_link
+    def bind_data_link(self, data_link: DataLinkManager):
+        self.data_links[data_link.link_port] = data_link
         self.router.our_calls.append(data_link.link_call)
+        data_link.add_l3_handler(self)
 
-    def bind_application(self, app_call: AX25Call, app_alias: str, app: Application):
+    def bind_application(self, app_call: AX25Call, app_alias: str):
         self.router.bind_application(app_call, app_alias)
-        self.l3_apps[app_call] = app
+        self.l3_apps[app_call] = app_alias
+
+        # Need to bind this here so the application can start sending packets right away
+        EventBus.bind(EventListener(
+            f"netrom.{app_call}.outbound",
+            f"netrom_{app_call}_outbound",
+            lambda remote_call, data: self.nl_data_request(remote_call, app_call, data)
+        ), True)
 
     def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
         data_link = self.data_links.get(port)
-        state = data_link.state_machine._get_or_create_session(remote_call, data_link.callsign())
-        if state.current_state == AX25StateType.Disconnected:
-            print(f"Opening data link to {remote_call}")
-            dl_connect = AX25StateEvent.dl_connect(remote_call, data_link.callsign())
-            data_link.state_machine.handle_internal_event(dl_connect)
+        if data_link.link_state(remote_call) == AX25StateType.Disconnected:
+            # print(f"Opening data link to {remote_call}")
+            data_link.dl_connect_request(remote_call)
 
     async def _update_nodes(self, heard_from: AX25Call, heard_on: int, nodes: NetRomNodes):
         async with self.route_lock:
-            #  print(f"Got Nodes\n{nodes}")
+            #print(f"Got Nodes\n{nodes}")
             self.router.update_routes(heard_from, heard_on, nodes)
             self._maybe_open_data_link(heard_on, heard_from)
-            #  print(f"New routing table\n{self.router}")
+            #print(f"New routing table\n{self.router}")
         await asyncio.sleep(10)
 
     async def _broadcast_nodes(self):

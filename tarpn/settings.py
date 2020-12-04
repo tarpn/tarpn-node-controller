@@ -74,7 +74,7 @@ class Settings:
     def port_configs(self):
         ports = []
         for section in self._config.sections():
-            m = re.match(r"port:(\d)", section)
+            m = re.match(r"port:(\d+)", section)
             if m:
                 ports.append(int(m.group(1)))
         port_configs = []
@@ -85,6 +85,18 @@ class Settings:
 
     def network_configs(self):
         return NetworkConfig(self._config["network"])
+
+    def app_configs(self):
+        apps = []
+        for section in self._config.sections():
+            m = re.match(r"app:(\w[\w\d]*)", section)
+            if m:
+                apps.append(m.group(1))
+        app_configs = []
+        for app in apps:
+            app_sect = self._config[f"app:{app}"]
+            app_configs.append(AppConfig.from_dict(app, app_sect))
+        return app_configs
 
 
 class Config:
@@ -181,3 +193,31 @@ class NetworkConfig(Config):
         parser.read_dict({f"network": configs})
         config = parser[f"network"]
         return cls(config)
+
+
+class AppConfig(Config):
+    def __init__(self, app_name, app_config):
+        super().__init__(f"app:{app_name}", app_config)
+        self._app_name = app_name
+
+    def app_name(self):
+        return self._app_name
+
+    def app_call(self):
+        return super().get("app.call")
+
+    def app_alias(self):
+        return super().get("app.alias")
+
+    def app_socket(self):
+        return super().get("app.sock")
+
+    def app_module(self):
+        return super().get("app.module")
+
+    @classmethod
+    def from_dict(cls, app_name: str, configs: dict):
+        parser = configparser.ConfigParser()
+        parser.read_dict({f"app:{app_name}": configs})
+        config = parser[f"app:{app_name}"]
+        return cls(app_name, config)

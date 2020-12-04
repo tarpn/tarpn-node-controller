@@ -1,6 +1,14 @@
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import IntEnum, Enum, auto
 from typing import List, Iterator
+
+
+class AX25StateType(Enum):
+    Disconnected = auto()
+    AwaitingConnection = auto()
+    Connected = auto()
+    AwaitingRelease = auto()
+    TimerRecovery = auto()
 
 
 @dataclass
@@ -310,7 +318,7 @@ class DummyPacket(AX25Packet):
         return cls(bytes(), dest, source, [], 0x00)
 
 
-def parse_ax25_call(byte_iter: Iterator[int]):
+def parse_ax25_call(byte_iter: Iterator[int]) -> AX25Call:
     call = ""
     for i in range(6):
         c = (next(byte_iter) & 0xFF) >> 1
@@ -382,6 +390,7 @@ class AX25:
         "D": "UA received without F=1 when SABM or DISC was sent P=1",
         "E": "DM received in states 3, 4 or 5",
         "F": "Data link reset; i.e., SABM received in state 3, 4 or 5",
+        "G": "T1 retries exceeded",
         "I": "N2 timeouts: unacknowledged data",
         "J": "N(r) sequence error",
         "L": "Control field invalid or not implemented",
@@ -407,17 +416,61 @@ class AX25:
     def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code):
         raise NotImplemented
 
-    def dl_data(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
+    def dl_data_request(self, remote_call: AX25Call, protocol: L3Protocol, data: bytes):
         raise NotImplemented
 
-    def dl_connect(self, remote_call: AX25Call, local_call: AX25Call):
+    def dl_data_indication(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
         raise NotImplemented
 
-    def dl_disconnect(self, remote_call: AX25Call, local_call: AX25Call):
+    def dl_connect_request(self, remote_call: AX25Call):
+        raise NotImplemented
+
+    def dl_connect_indication(self, remote_call: AX25Call, local_call: AX25Call):
+        raise NotImplemented
+
+    def dl_disconnect_request(self, remote_call: AX25Call):
+        raise NotImplemented
+
+    def dl_disconnect_indication(self, remote_call: AX25Call, local_call: AX25Call):
         raise NotImplemented
 
     def write_packet(self, packet: AX25Packet):
         raise NotImplemented
 
+    def link_state(self, remote_call: AX25Call) -> AX25StateType:
+        raise NotImplemented
+
     def callsign(self):
         raise NotImplemented
+
+
+class L3Handler:
+    def can_handle(self, protocol: L3Protocol) -> bool:
+        """
+        Test if this handler can accept the given L3 protocol
+
+        :param protocol:
+        :return: True if this handler can accept the given L3 protocol
+        """
+        return False
+
+    def maybe_handle_special(self, port: int, packet: AX25Packet) -> bool:
+        """
+        Handle a special packet at L2.
+
+        :param port: the L2 port this packet was heard on
+        :param packet: the packet
+        :return: False if this packet was fully handled, True if it should continue processing
+        """
+        return True
+
+    def handle(self, port: int, remote_call: AX25Call, data: bytes) -> bool:
+        """
+        Handle an L3 data packet. This assumes that can_handle was first called and returned True.
+
+        :param port:
+        :param remote_call:
+        :param data:
+        :return: True if the packet was fully handled, False if we should move onto the next handler
+        """
+        return False

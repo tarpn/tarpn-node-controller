@@ -6,6 +6,7 @@ import serial_asyncio
 
 from tarpn.ax25 import decode_ax25_packet
 from tarpn.port.kiss import KISSProtocol
+from tarpn.settings import PortConfig
 
 
 async def printer(inbound):
@@ -24,10 +25,17 @@ def main():
     parser.add_argument("--check_crc", type=bool, default=False)
     args = parser.parse_args()
 
+    port_config = PortConfig.from_dict(0, {
+        "port.enabled": True,
+        "port.type": "serial",
+        "serial.device": args.port,
+        "serial.speed": args.baud
+    })
+
     loop = asyncio.get_event_loop()
     in_queue: asyncio.Queue = asyncio.Queue()
     out_queue: asyncio.Queue = asyncio.Queue()
-    protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, tnc_port=0, check_crc=args.check_crc)
+    protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, port_config.port_id(), check_crc=args.check_crc)
     protocol = serial_asyncio.create_serial_connection(loop, protocol_factory, args.port, baudrate=args.baud)
     asyncio.ensure_future(protocol)
     print('Scheduled Serial connection')

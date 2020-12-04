@@ -1,91 +1,85 @@
 import argparse
 import asyncio
-from time import sleep
-from typing import cast, List
+import logging
+import sys
+from functools import partial
 
-from tarpn.app import Application, Context
-from tarpn.app.chat import ChatApplication
-from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame
-from tarpn.ax25.datalink import DataLinkManager
-from tarpn.frame import L3Handler
+from tarpn.app import NetromAppProtocol
+from tarpn.app.sysop import SysopInternalApp
+from tarpn.ax25 import AX25Call
+from tarpn.ax25.datalink import DataLinkManager, IdHandler
 from tarpn.netrom.network import NetRomNetwork
-from tarpn.port import port_factory
+from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import Settings
-
-
-class IdHandler(L3Handler):
-    def maybe_handle_special(self, port: int, packet: AX25Packet) -> bool:
-        if packet.dest == AX25Call("ID") and isinstance(packet, UIFrame):
-            ui = cast(UIFrame, packet)
-            print(f"Got ID from {packet.source}: {ui.info}")
-            return False
-        elif packet.dest == AX25Call("CQ") and isinstance(packet, UIFrame):
-            ui = cast(UIFrame, packet)
-            print(f"Got CQ from {packet.source}: {ui.info}")
-            return False
-        return True
-
-
-class SysopApplication(Application):
-    def __init__(self):
-        self.data_link_managers: List[DataLinkManager] = []
-
-    def on_connect(self, context: Context):
-        context.write("Welcome\r".encode("ASCII"))
-
-    def on_disconnect(self, context: Context):
-        super().on_disconnect(context)
-
-    def on_error(self, context: Context, error: str):
-        super().on_error(context, error)
-
-    def read(self, context: Context, data: bytes):
-        cmd = data.decode("ASCII").strip()
-        if cmd == "PORTS":
-            resp = "Ports:\r"
-            for dlm in self.data_link_managers:
-                resp += f"{dlm.link_port}: {dlm.link_call}\r"
-            context.write(resp.encode("ASCII"))
-        elif cmd == "BYE":
-            context.write("Closing link, goodbye!\r".encode("ASCII"))
-            sleep(0.1)
-            context.close()
-        elif cmd == "":
-            context.write(b"\b")
-        else:
-            context.write(f"Unknown command: {cmd}\r".encode("ASCII"))
 
 
 async def main_async():
     parser = argparse.ArgumentParser(description='Decode packets from a serial port')
     parser.add_argument("config", help="Config file")
+    parser.add_argument("--debug", action="store_true")
+
     args = parser.parse_args()
 
     s = Settings(".", args.config)
 
-    app = SysopApplication()
     dlms = []
     for port_config in s.port_configs():
         in_queue: asyncio.Queue = asyncio.Queue()
         out_queue: asyncio.Queue = asyncio.Queue()
-        await port_factory(in_queue, out_queue, port_config)
+        await kiss_port_factory(in_queue, out_queue, port_config)
         # Wire the port with an AX25 layer
         dlm = DataLinkManager(AX25Call.parse(s.node_config().node_call()), port_config.port_id(),
-                              in_queue, out_queue, app)
+                              in_queue, out_queue)
         dlms.append(dlm)
 
     # Wire up Layer 3 and default L2 app
     nl = NetRomNetwork(s.network_configs())
     for dlm in dlms:
-        nl.bind_data_link(dlm.link_port, dlm)
-        dlm.add_l3_handler(L3Protocol.NetRom, nl)
-        dlm.add_l3_handler(L3Protocol.NoLayer3, IdHandler())
-        app.data_link_managers.append(dlm)
+        nl.bind_data_link(dlm)
+        dlm.add_l3_handler(IdHandler())
 
-    nl.bind_application(AX25Call("K4DBZ", 10), "ZDBZ10", ChatApplication())
+    # Create the main event loop
+    loop = asyncio.get_event_loop()
+
+    # Bind apps to netrom and start running the app servers
+    for app_config in s.app_configs():
+        nl.bind_application(AX25Call.parse(app_config.app_call()), app_config.app_alias())
+        factory = partial(NetromAppProtocol, app_config.app_name(), AX25Call.parse(app_config.app_call()), app_config.app_alias(), nl)
+        await loop.create_unix_server(factory, app_config.app_socket(), start_serving=True)
+
+    # TODO add this, but configure the port
+    # factory = partial(SysopInternalApp, dlms, nl)
+    # await loop.create_server(factory, "0.0.0.0", 8888, start_serving=True)
+
+    # Configure logging
+    packet_logger = logging.getLogger("packet")
+    packet_logger.setLevel(logging.DEBUG)
+    packet_logger.addHandler(logging.StreamHandler(sys.stdout))
+
+    event_logger = logging.getLogger("events")
+    event_logger.setLevel(logging.DEBUG)
+    event_logger.addHandler(logging.StreamHandler(sys.stdout))
+
+    ax25_state_logger = logging.getLogger("ax25.statemachine")
+    netrom_state_logger = logging.getLogger("netrom.statemachine")
+
+    fh = logging.FileHandler('logs/state.log')
+    fh.setLevel(logging.DEBUG)
+    ax25_state_logger.addHandler(fh)
+    netrom_state_logger.addHandler(fh)
+
+    if args.debug:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(logging.DEBUG)
+        ax25_state_logger.setLevel(logging.DEBUG)
+        netrom_state_logger.setLevel(logging.DEBUG)
+        ax25_state_logger.addHandler(sh)
+        netrom_state_logger.addHandler(sh)
 
     # Start processing packets
-    await asyncio.wait([dlm.start() for dlm in dlms])
+    tasks = [dlm.start() for dlm in dlms]
+    tasks.append(nl.start())
+    await asyncio.wait(tasks)
 
 
 def main():
