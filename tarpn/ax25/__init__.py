@@ -10,6 +10,12 @@ class AX25StateType(Enum):
     AwaitingRelease = auto()
     TimerRecovery = auto()
 
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
+
 
 @dataclass
 class AX25Call:
@@ -166,6 +172,12 @@ class UnnumberedType(IntEnum):
     UI = 0x03
     """Unnumbered Information"""
 
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
+
     @staticmethod
     def from_control_byte(b):
         b = b & ~0x10
@@ -219,6 +231,12 @@ class L3Protocol(IntEnum):
     NetRom = 0xCF
     NoLayer3 = 0xF0
     # TODO include others?
+
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
 
 
 @dataclass

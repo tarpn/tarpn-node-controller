@@ -8,7 +8,7 @@ from tarpn.ax25 import AX25StateType
 from tarpn.port.kiss import decode_kiss_frame
 
 
-class TestAX25(unittest.TestCase):
+class TestAX25(unittest.IsolatedAsyncioTestCase):
     def test_parse(self):
         data = bytes([0, 150, 104, 136, 132, 180, 64, 228, 150, 104, 136, 132, 180, 64, 115, 17])
         frame = decode_kiss_frame(data)
@@ -36,7 +36,7 @@ class TestAX25(unittest.TestCase):
         packet = decode_ax25_packet(s_frame.buffer)
         assert s_frame == packet
 
-    def test_connect(self):
+    async def test_connect(self):
         in_queue = asyncio.Queue()
         out_queue = asyncio.Queue()
         ax25 = DataLinkManager(AX25Call("K4DBZ", 1), 0, in_queue, out_queue)
@@ -50,7 +50,7 @@ class TestAX25(unittest.TestCase):
         state = ax25.state_machine._sessions["K4DBZ-2"]
         assert state.current_state == AX25StateType.AwaitingConnection
 
-    def test_link(self):
+    async def test_link(self):
         # TEST-1
         in_queue_1 = asyncio.Queue()
         out_queue_1 = asyncio.Queue()
@@ -72,13 +72,12 @@ class TestAX25(unittest.TestCase):
                 frame = await source.get()
                 await sink.put(frame)
                 source.task_done()
-        asyncio.ensure_future(bridge(out_queue_1, in_queue_2))
-        asyncio.ensure_future(bridge(out_queue_2, in_queue_1))
+        asyncio.create_task(bridge(out_queue_1, in_queue_2))
+        asyncio.create_task(bridge(out_queue_2, in_queue_1))
 
         # Start the run loop
-        asyncio.ensure_future(ax25_1.start())
-        asyncio.ensure_future(ax25_2.start())
-        loop = asyncio.get_event_loop()
+        asyncio.create_task(ax25_1.start())
+        asyncio.create_task(ax25_2.start())
 
         async def connected():
             while True:
@@ -87,7 +86,7 @@ class TestAX25(unittest.TestCase):
                 await asyncio.sleep(0.010)
             return True
 
-        loop.run_until_complete(connected())
+        await connected()
 
         assert ax25_1.state_machine._sessions["TEST-2"].current_state == AX25StateType.Connected
         assert ax25_2.state_machine._sessions["TEST-1"].current_state == AX25StateType.Connected

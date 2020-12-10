@@ -1,21 +1,19 @@
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from functools import partial
 from itertools import cycle
 import logging
-from typing import Optional, cast, Dict, List
+from typing import Optional, cast, Dict
 
 from asyncio import Future
 
 from tarpn.ax25 import AX25Call
+from tarpn.logging import LoggingMixin
 from tarpn.netrom import NetRomPacket, NetRomConnectRequest, NetRomConnectAck, OpType, NetRom, NetRomInfo
 
 
-logger = logging.getLogger("netrom.statemachine")
-
-
 class NetRomEventType(Enum):
+    # Packet events
     NETROM_CONNECT = auto()
     NETROM_CONNECT_ACK = auto()
     NETROM_DISCONNECT = auto()
@@ -23,9 +21,16 @@ class NetRomEventType(Enum):
     NETROM_INFO = auto()
     NETROM_INFO_ACK = auto()
 
+    # API events
     NL_CONNECT = auto()
     NL_DISCONNECT = auto()
     NL_DATA = auto()
+
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
 
 
 @dataclass
@@ -35,6 +40,9 @@ class NetRomStateEvent:
     event_type: NetRomEventType
     packet: Optional[NetRomPacket] = None
     data: Optional[bytes] = None
+
+    def __repr__(self):
+        return f"{self.event_type}"
 
     @classmethod
     def from_packet(cls, packet: NetRomPacket):
@@ -75,6 +83,12 @@ class NetRomStateType(Enum):
     AwaitingRelease = auto()
     Disconnected = auto()
 
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
+
 
 @dataclass
 class NetRomCircuit:
@@ -100,6 +114,10 @@ class NetRomCircuit:
     def __repr__(self):
         return f"NetRomCircuit(id={self.circuit_id} rid={self.remote_circuit_id} state={self.state} " \
                f"remote={self.remote_call} local={self.local_call})"
+
+    def log_prefix(self):
+        return f"NET/ROM [Circuit={self.circuit_id} RemoteCircuit={self.remote_circuit_id} Local={self.local_call} " \
+               f"Remote={self.remote_call} State={self.state}]"
 
     @classmethod
     def create(cls, circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
@@ -143,7 +161,8 @@ class NetRomCircuit:
 def disconnected_handler(
         circuit: NetRomCircuit,
         event: NetRomStateEvent,
-        netrom: NetRom) -> NetRomStateType:
+        netrom: NetRom,
+        logger: LoggingMixin) -> NetRomStateType:
     assert circuit.state == NetRomStateType.Disconnected
 
     if event.event_type == NetRomEventType.NETROM_CONNECT:
@@ -234,7 +253,8 @@ def disconnected_handler(
 def awaiting_connection_handler(
         circuit: NetRomCircuit,
         event: NetRomStateEvent,
-        netrom: NetRom) -> NetRomStateType:
+        netrom: NetRom,
+        logger: LoggingMixin) -> NetRomStateType:
     assert circuit.state == NetRomStateType.AwaitingConnection
 
     if event.event_type == NetRomEventType.NETROM_CONNECT:
@@ -276,7 +296,8 @@ def awaiting_connection_handler(
 def connected_handler(
         circuit: NetRomCircuit,
         event: NetRomStateEvent,
-        netrom: NetRom) -> NetRomStateType:
+        netrom: NetRom,
+        logger: LoggingMixin) -> NetRomStateType:
     assert circuit.state == NetRomStateType.Connected
 
     if event.event_type == NetRomEventType.NETROM_CONNECT:
@@ -499,7 +520,8 @@ def connected_handler(
 def awaiting_release_handler(
         circuit: NetRomCircuit,
         event: NetRomStateEvent,
-        netrom: NetRom) -> NetRomStateType:
+        netrom: NetRom,
+        logger: LoggingMixin) -> NetRomStateType:
     assert circuit.state == NetRomStateType.AwaitingRelease
 
     if event.event_type == NetRomEventType.NETROM_DISCONNECT_ACK:
@@ -541,9 +563,10 @@ class NetRomStateMachine:
         self._next_circuit_key_iter = cycle(range(0xffff))
         self._events = asyncio.Queue()
         self._stopped = False
+        self._logger = logging.getLogger("netrom.state")
 
     async def start(self):
-        logger.info("Start NetRom state machine")
+        self._logger.info("Start NetRom state machine")
         while not self._stopped:
             await self._loop()
 
@@ -553,15 +576,15 @@ class NetRomStateMachine:
     async def _loop(self):
         event = await self._events.get()
         if event is not None:
+            circuit = self._get_circuit(event.circuit_id, event.circuit_id)
+            handler = self._handlers[circuit.state]
+            if handler is None:
+                raise RuntimeError(f"No handler for state {handler}")
+            logger = LoggingMixin(self._logger, circuit.log_prefix)
             try:
-                circuit = self._get_circuit(event.circuit_id, event.circuit_id)
-                handler = self._handlers[circuit.state]
-                if handler is None:
-                    raise RuntimeError(f"No handler for state {handler}")
-                logger.debug(f"{circuit}, handling {event}")
-                new_state = handler(circuit, event, self._netrom)
+                logger.debug(f"Handling {event}")
+                new_state = handler(circuit, event, self._netrom, logger)
                 circuit.state = new_state
-                logger.debug(circuit)
             except Exception as err:
                 logger.exception(f"Failed to handle {event}", err)
             finally:
@@ -583,7 +606,7 @@ class NetRomStateMachine:
                 #  TODO also check last used time
                 to_reap.append(circuit_key)
         for circuit_key in to_reap:
-            logger.debug(f"Reaping disconnected circuit {circuit_key}")
+            self._logger.debug(f"Reaping disconnected circuit {circuit_key}")
             del self._circuits[circuit_key]
 
     def _get_or_create_circuit(self, netrom_packet: NetRomPacket) -> NetRomCircuit:
@@ -606,7 +629,7 @@ class NetRomStateMachine:
             if circuit_key in self._circuits:
                 circuit = self._circuits[circuit_key]
             else:
-                logger.warning(f"Creating new circuit for packet {netrom_packet}")
+                self._logger.warning(f"Creating new circuit for packet {netrom_packet}")
                 circuit = NetRomCircuit(netrom_packet.circuit_idx, netrom_packet.circuit_id, netrom_packet.origin,
                                         netrom_packet.dest)
                 self._circuits[circuit_key] = circuit

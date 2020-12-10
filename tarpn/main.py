@@ -1,16 +1,23 @@
 import argparse
 import asyncio
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sys
 from functools import partial
 
 from tarpn.app import NetromAppProtocol
-from tarpn.app.sysop import SysopInternalApp
 from tarpn.ax25 import AX25Call
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
-from tarpn.netrom.network import NetRomNetwork
+from tarpn.netrom.network import NetworkManager
 from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import Settings
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
+
+logger = logging.getLogger("main")
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 async def main_async():
@@ -22,6 +29,9 @@ async def main_async():
 
     s = Settings(".", args.config)
 
+    # Create the main event loop
+    loop = asyncio.get_event_loop()
+
     dlms = []
     for port_config in s.port_configs():
         in_queue: asyncio.Queue = asyncio.Queue()
@@ -29,17 +39,14 @@ async def main_async():
         await kiss_port_factory(in_queue, out_queue, port_config)
         # Wire the port with an AX25 layer
         dlm = DataLinkManager(AX25Call.parse(s.node_config().node_call()), port_config.port_id(),
-                              in_queue, out_queue)
+                              in_queue, out_queue, loop.create_future)
         dlms.append(dlm)
 
     # Wire up Layer 3 and default L2 app
-    nl = NetRomNetwork(s.network_configs())
+    nl = NetworkManager(s.network_configs())
     for dlm in dlms:
         nl.bind_data_link(dlm)
         dlm.add_l3_handler(IdHandler())
-
-    # Create the main event loop
-    loop = asyncio.get_event_loop()
 
     # Bind apps to netrom and start running the app servers
     for app_config in s.app_configs():
@@ -53,32 +60,36 @@ async def main_async():
 
     # Configure logging
     packet_logger = logging.getLogger("packet")
-    packet_logger.setLevel(logging.DEBUG)
-    packet_logger.addHandler(logging.StreamHandler(sys.stdout))
+    packet_logger.setLevel(logging.INFO)
+    packet_logger.addHandler(handler)
 
     event_logger = logging.getLogger("events")
-    event_logger.setLevel(logging.DEBUG)
-    event_logger.addHandler(logging.StreamHandler(sys.stdout))
+    event_logger.setLevel(logging.INFO)
+    event_logger.addHandler(handler)
 
-    ax25_state_logger = logging.getLogger("ax25.statemachine")
-    netrom_state_logger = logging.getLogger("netrom.statemachine")
+    ax25_state_logger = logging.getLogger("ax25.state")
+    netrom_state_logger = logging.getLogger("netrom.state")
 
+    fh = TimedRotatingFileHandler('logs/state.log', when='midnight')
     fh = logging.FileHandler('logs/state.log')
     fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
     ax25_state_logger.addHandler(fh)
     netrom_state_logger.addHandler(fh)
 
     if args.debug:
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setLevel(logging.DEBUG)
+        packet_logger.setLevel(logging.DEBUG)
+        event_logger.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG)
         ax25_state_logger.setLevel(logging.DEBUG)
         netrom_state_logger.setLevel(logging.DEBUG)
-        ax25_state_logger.addHandler(sh)
-        netrom_state_logger.addHandler(sh)
+        ax25_state_logger.addHandler(handler)
+        netrom_state_logger.addHandler(handler)
 
     # Start processing packets
     tasks = [dlm.start() for dlm in dlms]
     tasks.append(nl.start())
+    logger.info("Packet engine started")
     await asyncio.wait(tasks)
 
 

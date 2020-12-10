@@ -9,11 +9,7 @@ from tarpn.events import EventListener, EventBus
 from tarpn.netrom import NetRom
 from tarpn.netrom.statemachine import NetRomStateType
 
-"""
-This is the default application for the packet engine. If configured, it runs as a NoLayer3 L2 application as 
-well as a NetRom application for the engine's node.call. Unlike other applications, this one runs within
-the packet engine since it needs access to internal things like the active links, routing table, etc.
-"""
+
 
 
 class SysopL3Handler(L3Handler):
@@ -29,6 +25,11 @@ class SysopL3Handler(L3Handler):
 
 
 class SysopInternalApp(Protocol):
+    """
+    This is the default application for the packet engine. If configured, it runs as a NoLayer3 L2 application as
+    well as a NetRom application for the engine's node.call. Unlike other applications, this one runs within
+    the packet engine since it needs access to internal things like the active links, routing table, etc.
+    """
     def __init__(self, links: List[DataLinkManager], network: NetRom):
         self.transport = None
         self.links: List[DataLinkManager] = links
@@ -85,9 +86,9 @@ class SysopInternalApp(Protocol):
         elif cmd == "L" or cmd == "LINKS":
             resp = "Links:\r\n"
             for dlm in self.links:
-                for remote_call in dlm.state_machine.get_sessions():
-                    if dlm.state_machine.get_state(remote_call) == AX25StateType.Connected:
-                        resp += f"L2 {dlm.link_call} > {remote_call} on port {dlm.link_port}\r\n"
+                for remote_call in dlm.state_machine.get_sessions().keys():
+                    if dlm.state_machine.get_state(str(remote_call)) == AX25StateType.Connected:
+                        resp += f"L2 {dlm.link_call} > {str(remote_call)} on port {dlm.link_port}\r\n"
             for circuit_id in self.network.get_circuit_ids():
                 circuit = self.network.get_circuit(circuit_id)
                 if circuit.state == NetRomStateType.Connected:

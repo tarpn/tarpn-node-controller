@@ -10,7 +10,7 @@ from tarpn.ax25 import AX25Call
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
 from tarpn.events import EventBus, EventListener
 from tarpn.netrom import NetRom
-from tarpn.netrom.network import NetRomNetwork
+from tarpn.netrom.network import NetworkManager
 from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import PortConfig, NetworkConfig
 
@@ -120,7 +120,7 @@ def main():
 
     # Wire the port with an AX25 layer
     tty = TTY(args.local_call)
-    dlm = DataLinkManager(AX25Call.parse(args.local_call), port_config.port_id(), in_queue, out_queue)
+    dlm = DataLinkManager(AX25Call.parse(args.local_call), port_config.port_id(), in_queue, out_queue, loop.create_future)
 
     # Wire up the network
     network_config = NetworkConfig.from_dict({
@@ -132,7 +132,7 @@ def main():
         "netrom.obs.min": 4,
         "netrom.nodes.quality.min": 74
     })
-    nl = NetRomNetwork(network_config)
+    nl = NetworkManager(network_config)
     nl.bind_data_link(dlm)
     dlm.add_l3_handler(IdHandler())
 

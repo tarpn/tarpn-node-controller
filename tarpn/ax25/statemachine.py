@@ -13,10 +13,8 @@ from typing import Callable, cast, Dict, Optional, List
 
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
     L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25, AX25StateType
+from tarpn.logging import LoggingMixin
 from tarpn.util import Timer
-
-
-logger = logging.getLogger("ax25.statemachine")
 
 
 class AX25EventType(Enum):
@@ -43,13 +41,22 @@ class AX25EventType(Enum):
     # DL_FLOW_ON,
     IFRAME_READY = auto()
 
+    def __repr__(self):
+        return self.name
+
+    def __str__(self):
+        return self.name
+
 
 @dataclass
 class AX25StateEvent:
     remote_call: AX25Call
     packet: Optional[AX25Packet]
     event_type: AX25EventType
-    future: Future = asyncio.get_event_loop().create_future()
+    future: Future = None
+
+    def __repr__(self):
+        return f"{self.event_type}"
 
     @classmethod
     def t1_expire(cls, remote_call: AX25Call):
@@ -137,7 +144,7 @@ class AX25State:
     va: int = 0
     rc: int = 0
     ack_pending: bool = False
-    pending_frames: queue.Queue = queue.Queue() # (InternalInfo, Future)
+    pending_frames: queue.Queue = queue.Queue()  # (InternalInfo, Future)
     sent_frames: Dict[int, IFrame] = field(default_factory=dict)
     futures: Dict[int, Future] = field(default_factory=dict)
 
@@ -145,6 +152,9 @@ class AX25State:
     reject_exception: bool = False
     layer_3: bool = False
     # TODO other fields
+
+    def log_prefix(self):
+        return f"AX25 [Id={self.session_id} Local={self.local_call} Remote={self.remote_call} State={self.current_state}]"
 
     @classmethod
     def create(cls,
@@ -157,11 +167,9 @@ class AX25State:
         return new_state
 
     def t1_timeout(self):
-        logger.debug(f"t1 for {self}")
         self.internal_event_cb(AX25StateEvent.t1_expire(self.remote_call))
 
     def t3_timeout(self):
-        logger.debug(f"t3 for {self}")
         self.internal_event_cb(AX25StateEvent.t3_expire(self.remote_call))
 
     def reset(self):
@@ -216,10 +224,7 @@ class AX25State:
 
     def window_exceeded(self):
         """If V(S) is equal to V(A) + window size (7) means we can't transmit any more until we get an ACK"""
-        exceeded = (self.vs % 8) == ((self.va + 7) % 8)
-        if exceeded:
-            logger.debug(f"vs: {self.vs} va: {self.va} k: 7")
-        return exceeded
+        return (self.vs % 8) == ((self.va + 7) % 8)
 
     def check_send_eq_ack(self):
         return self.vs % 8 == self.va
@@ -279,7 +284,7 @@ def check_iframe_ack(state: AX25State, nr: int):
     if nr == state.get_send_state():
         state.set_ack_state(nr & 0xFF)
         fut = state.futures.get(nr - 1)
-        if fut:
+        if fut and not fut.done():
             fut.set_result(None)
         state.t1.cancel()
         state.t3.start()
@@ -287,7 +292,7 @@ def check_iframe_ack(state: AX25State, nr: int):
     elif nr != state.get_ack_state():
         state.set_ack_state(nr & 0xFF)
         fut = state.futures.get(nr - 1)
-        if fut:
+        if fut and not fut.done():
             fut.set_result(None)
         state.t1.start()
 
@@ -323,7 +328,8 @@ def invoke_retransmission(state: AX25State, ax25: AX25):
 def disconnected_handler(
         state: AX25State,
         event: AX25StateEvent,
-        ax25: AX25) -> AX25StateType:
+        ax25: AX25,
+        logger: LoggingMixin) -> AX25StateType:
     """Handle packets when we are in a disconnected state
     """
     assert state.current_state == AX25StateType.Disconnected
@@ -394,7 +400,8 @@ def disconnected_handler(
 def awaiting_connection_handler(
         state: AX25State,
         event: AX25StateEvent,
-        ax25: AX25) -> AX25StateType:
+        ax25: AX25,
+        logger: LoggingMixin) -> AX25StateType:
     """Handle packets when we are in a awaiting connection state
     """
     assert state.current_state == AX25StateType.AwaitingConnection
@@ -496,7 +503,8 @@ def awaiting_connection_handler(
 def connected_handler(
         state: AX25State,
         event: AX25StateEvent,
-        ax25: AX25) -> AX25StateType:
+        ax25: AX25,
+        logger: LoggingMixin) -> AX25StateType:
     assert state.current_state == AX25StateType.Connected
     if event.event_type == AX25EventType.DL_CONNECT:
         state.clear_pending_iframes()
@@ -520,7 +528,7 @@ def connected_handler(
         (pending, future) = cast(InternalInfo, state.pending_frames.get())
         logger.debug(f"Pending iframe: {pending}")
         if state.window_exceeded():
-            logger.debug("Delaying frame")
+            logger.debug(f"Window exceeded, delaying frame")
             asyncio.create_task(delay_outgoing_data(state, pending, future))
         else:
             i_frame = IFrame.i_frame(
@@ -654,7 +662,8 @@ def connected_handler(
 def timer_recovery_handler(
         state: AX25State,
         event: AX25StateEvent,
-        ax25: AX25) -> AX25StateType:
+        ax25: AX25,
+        logger: LoggingMixin) -> AX25StateType:
     assert state.current_state == AX25StateType.TimerRecovery
     if event.event_type == AX25EventType.DL_CONNECT:
         state.clear_pending_iframes()
@@ -676,7 +685,7 @@ def timer_recovery_handler(
     elif event.event_type == AX25EventType.IFRAME_READY:
         pending, future = state.pending_frames.get()
         if state.window_exceeded():
-            logger.debug("Delaying outgoing frame")
+            logger.debug("Window exceeded, delaying frame")
             asyncio.ensure_future(delay_outgoing_data(state, pending, future))
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
@@ -848,7 +857,8 @@ def timer_recovery_handler(
 def awaiting_release_handler(
         state: AX25State,
         event: AX25StateEvent,
-        ax25: AX25) -> AX25StateType:
+        ax25: AX25,
+        logger: LoggingMixin) -> AX25StateType:
     assert state.current_state == AX25StateType.AwaitingRelease
     if event.event_type == AX25EventType.DL_DISCONNECT:
         dm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
@@ -977,6 +987,11 @@ class AX25StateMachine:
             AX25StateType.TimerRecovery: timer_recovery_handler,
             AX25StateType.AwaitingRelease: awaiting_release_handler
         }
+        self._logger = logging.getLogger("ax25.state")
+
+    def log(self, state: AX25State, msg: str, *args, **kwargs):
+        self._logger.info(f"[Id={state.session_id} Local={state.local_call} Remote={state.remote_call} "
+                          f"State={state.current_state}] {msg}")
 
     def _get_or_create_session(self, remote_call: AX25Call, local_call: AX25Call) -> AX25State:
         session_id = str(remote_call)
@@ -986,8 +1001,8 @@ class AX25StateMachine:
             self._sessions[session_id] = state
         return state
 
-    def get_sessions(self) -> List[AX25Call]:
-        return [s.remote_call for s in self._sessions.values()]
+    def get_sessions(self) -> Dict[AX25Call, AX25StateType]:
+        return {s.remote_call: s.current_state for k, s in self._sessions.items()}
 
     def get_state(self, remote_call: AX25Call) -> AX25StateType:
         session_id = str(remote_call)
@@ -1004,10 +1019,10 @@ class AX25StateMachine:
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")
         deferred = DeferredAX25(self._ax25)
-        logger.debug(f"In {state.current_state}, handling {event}")
-        new_state = self._handlers[state.current_state](state, event, deferred)
+        logger = LoggingMixin(self._logger, state.log_prefix)
+        logger.debug(f"Handling {event}")
+        new_state = handler(state, event, deferred, logger)
         state.current_state = new_state
-        logger.debug(f"Now in {state.current_state}, {deferred.size()} deferred calls")
         deferred.apply()
 
     def handle_internal_event(self, event: AX25StateEvent):
@@ -1022,8 +1037,8 @@ class AX25StateMachine:
         if handler is None:
             raise RuntimeError(f"No handler for {handler}")
         deferred = DeferredAX25(self._ax25)
-        logger.debug(f"In {state.current_state}, handling {event}")
-        new_state = self._handlers[state.current_state](state, event, deferred)
+        logger = LoggingMixin(self._logger, state.log_prefix)
+        logger.debug(f"Handling {event}")
+        new_state = handler(state, event, deferred, logger)
         state.current_state = new_state
-        logger.debug(f"Now in {state.current_state}, {deferred.size()} deferred calls")
         deferred.apply()

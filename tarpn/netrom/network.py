@@ -12,14 +12,11 @@ from typing import Dict, List, cast, Iterator
 from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, parse_ax25_call, SupervisoryCommand, AX25StateType
 from tarpn.ax25.datalink import DataLinkManager, L3Handler
 from tarpn.events import EventBus, EventListener
+from tarpn.logging import LoggingMixin
 from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet
 from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent
 from tarpn.settings import NetworkConfig
 from tarpn.util import chunks
-
-
-logger = logging.getLogger("netrom.network")
-packet_logger = logging.getLogger("packet")
 
 
 @dataclass
@@ -231,7 +228,8 @@ class RoutingTable:
                 node_destinations.append(NodeDestination(destination.node_call, destination.node_alias,
                                                          best_neighbor.next_hop, best_neighbor.quality))
             else:
-                logger.debug(f"No good neighbor was found for {destination}")
+                #  print(f"No good neighbor was found for {destination}")
+                pass
         return NetRomNodes(self.node_alias, node_destinations)
 
 
@@ -264,7 +262,7 @@ def encode_netrom_nodes(nodes: NetRomNodes) -> bytes:
     return bytes(b)
 
 
-class NetRomNetwork(NetRom, L3Handler):
+class NetworkManager(NetRom, L3Handler, LoggingMixin):
     def __init__(self, config: NetworkConfig):
         self.config = config
         self.sm = NetRomStateMachine(self)
@@ -274,13 +272,20 @@ class NetRomNetwork(NetRom, L3Handler):
         self.route_lock = Lock()
         asyncio.get_event_loop().create_task(self._broadcast_nodes())
 
+        def extra():
+            return f"[L4 Call={str(config.node_call())} Alias={config.node_alias()}]"
+        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+
     async def start(self):
+        self.info("Starting NetworkManager")
         await self.sm.start()
 
     def can_handle(self, protocol: L3Protocol) -> bool:
+        """L3Handler.can_handle"""
         return protocol == L3Protocol.NetRom
 
     def maybe_handle_special(self, port: int, packet: AX25Packet) -> bool:
+        """L3Handler.maybe_handle_special"""
         if type(packet) == UIFrame:
             ui = cast(UIFrame, packet)
             if ui.protocol == L3Protocol.NetRom and ui.dest == AX25Call("NODES"):
@@ -292,34 +297,36 @@ class NetRomNetwork(NetRom, L3Handler):
                 return False
         return True
 
-    def local_call(self) -> AX25Call:
-        return AX25Call.parse(self.config.node_call())
-
-    async def _handle_async(self, netrom_packet: NetRomPacket):
-        # If packet is for us, handle it, otherwise route it
-        EventBus.emit("netrom.incoming", [netrom_packet])
-        packet_logger.info(f"L3 RX: {netrom_packet}")
-
-        if netrom_packet.dest == AX25Call("KEEPLI-0"):
-            # print(f"Got keep alive from {netrom_packet.origin}")
-            pass
-        elif netrom_packet.dest == AX25Call.parse(self.config.node_call()):
-            # print(f"NET/ROM root handler: {netrom_packet}")
-            self.sm.handle_packet(netrom_packet)
-        elif netrom_packet.dest in self.l3_apps:
-            # print(f"NET/ROM app handler: {netrom_packet}")
-            self.sm.handle_packet(netrom_packet)
-        else:
-            # print(f"NET/ROM forwarding: {netrom_packet}")
-            self.write_packet(netrom_packet)
-
     def handle(self, port: int, remote_call: AX25Call, data: bytes):
+        """L3Handler.handle"""
         try:
             netrom_packet = parse_netrom_packet(data)
-            asyncio.create_task(self._handle_async(netrom_packet))
+            asyncio.create_task(self._handle_packet_async(netrom_packet))
             return True
         except:
             return False
+
+    def local_call(self) -> AX25Call:
+        return AX25Call.parse(self.config.node_call())
+
+    async def _handle_packet_async(self, netrom_packet: NetRomPacket):
+        """If packet is for us, handle it, otherwise forward it using our L3 routing table"""
+
+        EventBus.emit("netrom.incoming", [netrom_packet])
+        self.info(f"RX: {netrom_packet}")
+
+        if netrom_packet.dest == AX25Call("KEEPLI-0"):
+            # What are these?? Just ignore them
+            pass
+        elif netrom_packet.dest == AX25Call.parse(self.config.node_call()):
+            # Destination is this node
+            self.sm.handle_packet(netrom_packet)
+        elif netrom_packet.dest in self.l3_apps:
+            # Destination is an app served by this node
+            self.sm.handle_packet(netrom_packet)
+        else:
+            # Destination is somewhere else
+            self.write_packet(netrom_packet, forward=True)
 
     def get_circuit_ids(self) -> List[int]:
         return self.sm.get_circuits()
@@ -358,7 +365,7 @@ class NetRomNetwork(NetRom, L3Handler):
 
     # TODO error indication
 
-    def write_packet(self, packet: NetRomPacket) -> bool:
+    def write_packet(self, packet: NetRomPacket, forward: bool = False) -> bool:
         possible_routes = self.router.route(packet)
         routed = False
         for route in possible_routes:
@@ -370,14 +377,18 @@ class NetRomNetwork(NetRom, L3Handler):
                 #print(f"Routed {packet}")
                 routed = True
                 EventBus.emit("netrom.outbound", [packet])
-                packet_logger.info(f"L3 TX: {packet}")
+                if forward:
+                    # Log this transmission differently if it's being forwarded
+                    self.logger.info(f"[L3 Route={route} Neighbor={neighbor.call}] TX: {packet}")
+                else:
+                    self.info(f"TX: {packet}")
                 break
             except Exception as e:
                 #print(f"Had an error {e}")
                 pass
 
         if not routed:
-            logger.warning(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
+            self.warning(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
             pass
 
         return routed
@@ -400,7 +411,7 @@ class NetRomNetwork(NetRom, L3Handler):
 
     def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
         data_link = self.data_links.get(port)
-        if data_link.link_state(remote_call) == AX25StateType.Disconnected:
+        if data_link.link_state(remote_call) in (AX25StateType.Disconnected, AX25StateType.AwaitingRelease):
             # print(f"Opening data link to {remote_call}")
             data_link.dl_connect_request(remote_call)
 

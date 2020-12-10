@@ -32,7 +32,6 @@ setup(
                  'kiss-bench = tarpn.tools.kiss_bench:main',
                  'tarpn-tty = tarpn.tools.tty:main'
              ]},
-    data_files=[('config', ['sample.ini'])],
     python_requires='>=3.7',
     install_requires=[
         'appdirs==1.4.4',
