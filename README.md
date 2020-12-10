@@ -11,9 +11,14 @@ Pure Python implementation of a TNC (Terminal Node Controller).
 Create a virtualenv, activate, and install deps (using Python 3)
 
 ```
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .[develop]
+make init
+make deps
+```
+
+Run the tests
+
+```
+make test
 ```
 
 Now some "tarpn-" scripts are in your path. E.g.,
