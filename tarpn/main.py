@@ -6,6 +6,7 @@ import sys
 from functools import partial
 
 from tarpn.app import NetromAppProtocol
+from tarpn.app.sysop import NodeApplication, NodeHandler
 from tarpn.ax25 import AX25Call
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
 from tarpn.netrom.network import NetworkManager
@@ -28,6 +29,7 @@ async def main_async():
     args = parser.parse_args()
 
     s = Settings(".", args.config)
+    node_settings = s.node_config()
 
     # Create the main event loop
     loop = asyncio.get_event_loop()
@@ -38,25 +40,31 @@ async def main_async():
         out_queue: asyncio.Queue = asyncio.Queue()
         await kiss_port_factory(in_queue, out_queue, port_config)
         # Wire the port with an AX25 layer
-        dlm = DataLinkManager(AX25Call.parse(s.node_config().node_call()), port_config.port_id(),
+        dlm = DataLinkManager(AX25Call.parse(node_settings.node_call()), port_config.port_id(),
                               in_queue, out_queue, loop.create_future)
         dlms.append(dlm)
 
     # Wire up Layer 3 and default L2 app
-    nl = NetworkManager(s.network_configs())
+    nl = NetworkManager(s.network_configs(), loop)
     for dlm in dlms:
-        nl.bind_data_link(dlm)
+        nl.attach_data_link(dlm)
         dlm.add_l3_handler(IdHandler())
 
     # Bind apps to netrom and start running the app servers
     for app_config in s.app_configs():
-        nl.bind_application(AX25Call.parse(app_config.app_call()), app_config.app_alias())
+        nl.bind(AX25Call.parse(app_config.app_call()), app_config.app_alias())
         factory = partial(NetromAppProtocol, app_config.app_name(), AX25Call.parse(app_config.app_call()), app_config.app_alias(), nl)
         await loop.create_unix_server(factory, app_config.app_socket(), start_serving=True)
 
-    # TODO add this, but configure the port
-    # factory = partial(SysopInternalApp, dlms, nl)
-    # await loop.create_server(factory, "0.0.0.0", 8888, start_serving=True)
+    node_app_factory = partial(NodeApplication, s, dlms, nl)
+    for dlm in dlms:
+        dlm.add_l3_handler(NodeHandler(dlm, node_app_factory))
+
+    if node_settings.admin_enabled():
+        await loop.create_server(protocol_factory=node_app_factory,
+                                 host=node_settings.admin_listen(),
+                                 port=node_settings.admin_port(),
+                                 start_serving=True)
 
     # Configure logging
     packet_logger = logging.getLogger("packet")

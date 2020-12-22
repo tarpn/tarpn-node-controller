@@ -61,7 +61,10 @@ class DataLinkManager(AX25, LoggingMixin):
     def _loop_sync(self, frame: PortFrame):
         try:
             packet = decode_ax25_packet(frame.data)
-            self.info(f"RX: {packet}")
+            if packet.dest == AX25Call("NODES"):
+                self.debug(f"RX: {packet}")
+            else:
+                self.info(f"RX: {packet}")
             EventBus.emit("packet", [packet])
         except Exception:
             self.exception(f"Had an error parsing packet: {frame}")
@@ -120,21 +123,19 @@ class DataLinkManager(AX25, LoggingMixin):
         # We should be in AwaitingConnection at this point, if not there was a problem
         false_start = self.state_machine.get_state(remote_call) != AX25StateType.AwaitingConnection
 
-        # Wait to become Connected for some time
-        async def poll(timeout_ms):
+        # Wait to become Connected
+        async def poll():
             if false_start:
                 raise Exception(f"Could not initiate connection to {remote_call}")
-            start = time.time() * 1000.
-            while (time.time() * 1000. - start) < timeout_ms:
+            while True:
                 if self.state_machine.get_sessions().get(remote_call) == AX25StateType.Connected:
                     return True
                 elif self.state_machine.get_sessions().get(remote_call) == AX25StateType.Disconnected:
                     return False
                 else:
-                    await asyncio.sleep(0.010)
-            raise Exception(f"Timed out after {timeout_ms}ms when connecting to {remote_call}")
+                    await asyncio.sleep(0.001)
 
-        return asyncio.create_task(poll(100))
+        return asyncio.create_task(poll())
 
     def dl_connect_indication(self, remote_call: AX25Call, local_call: AX25Call):
         EventBus.emit(f"link.{local_call}.connect", remote_call)
@@ -143,6 +144,16 @@ class DataLinkManager(AX25, LoggingMixin):
         dl_disconnect = AX25StateEvent.dl_disconnect(remote_call, self.link_call)
         self.state_machine.handle_internal_event(dl_disconnect)
 
+        # Wait to become Disconnected
+        async def poll():
+            while True:
+                if self.state_machine.get_sessions().get(remote_call) == AX25StateType.Disconnected:
+                    return True
+                else:
+                    await asyncio.sleep(0.001)
+
+        return asyncio.create_task(poll())
+
     def dl_disconnect_indication(self, remote_call: AX25Call, local_call: AX25Call):
         EventBus.emit(f"link.{local_call}.disconnect", remote_call)
 
@@ -150,7 +161,7 @@ class DataLinkManager(AX25, LoggingMixin):
         event = AX25StateEvent.dl_data(remote_call, protocol, data)
         event.future = self.future_provider()
         self.state_machine.handle_internal_event(event)
-        return event.future  # TODO don't return a Future here, use a Task instead
+        return event.future  # TODO docs say don't return Future's
 
     def dl_data_indication(self, remote_call: AX25Call, local_call: AX25Call, protocol: L3Protocol, data: bytes):
         EventBus.emit(f"link.{local_call}.inbound", remote_call, protocol, data)
@@ -165,7 +176,10 @@ class DataLinkManager(AX25, LoggingMixin):
             self.warning(f"No handler defined for protocol {repr(protocol)}. Discarding")
 
     def write_packet(self, packet: AX25Packet):
-        self.info(f"TX: {packet}")
+        if packet.dest == AX25Call("NODES"):
+            self.debug(f"TX: {packet}")
+        else:
+            self.info(f"TX: {packet}")
         frame = PortFrame(self.link_port, packet.buffer, 0)
         asyncio.create_task(self.outbound.put(frame))
 

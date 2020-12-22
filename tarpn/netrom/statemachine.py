@@ -40,6 +40,7 @@ class NetRomStateEvent:
     event_type: NetRomEventType
     packet: Optional[NetRomPacket] = None
     data: Optional[bytes] = None
+    future: Optional[Future] = None
 
     def __repr__(self):
         return f"{self.event_type}"
@@ -110,6 +111,9 @@ class NetRomCircuit:
 
     more: bytes = bytearray()
     sent_info: Dict[int, NetRomInfo] = field(default_factory=dict)
+    info_futures: Dict[int, Future] = field(default_factory=dict)
+
+    # TODO need an ack timeout
 
     def __repr__(self):
         return f"NetRomCircuit(id={self.circuit_id} rid={self.remote_circuit_id} state={self.state} " \
@@ -137,12 +141,16 @@ class NetRomCircuit:
         self.vr += 1
 
     def enqueue_info_ack(self, netrom: NetRom):
-        if self.ack_future is None:
-            self.ack_future = asyncio.ensure_future(self.send_info_ack(netrom))
+        if not self.ack_pending:
             self.ack_pending = True
+            asyncio.create_task(self.send_info_ack(netrom))
+
+        #if self.ack_future is None:
+        #    self.ack_future = asyncio.create_task(self.send_info_ack(netrom))
+        #    self.ack_pending = True
 
     async def send_info_ack(self, netrom: NetRom):
-        await asyncio.sleep(0.100)  # TODO configure this
+        await asyncio.sleep(0.000)  # TODO configure this
         if self.ack_pending:
             info_ack = NetRomPacket(
                 self.remote_call,
@@ -154,6 +162,7 @@ class NetRomCircuit:
                 self.recv_state(),
                 OpType.InformationAcknowledge.as_op_byte(False, False, False)  # or F, T, F ?
             )
+            # TODO need to track ack high watermark
             netrom.write_packet(info_ack)
             self.ack_pending = False
 
@@ -401,6 +410,9 @@ def connected_handler(
 
         # Handle the ack logic
         if info.rx_seq_num > circuit.hw:
+            for seq in range(info.rx_seq_num, circuit.hw + 1):
+                seq = (seq + 127) % 128
+                circuit.info_futures[seq].set_result(True)
             circuit.hw = info.rx_seq_num
         else:
             # Out of sync, error
@@ -439,14 +451,21 @@ def connected_handler(
         ack = event.packet
 
         if ack.rx_seq_num > circuit.hw:
+            for seq in range(ack.rx_seq_num, circuit.hw + 1):
+                seq = (seq + 127) % 128
+                fut = circuit.info_futures.get(seq)
+                if fut:
+                    fut.set_result(True)
             circuit.hw = ack.rx_seq_num
         else:
             # Out of sync, error
             pass
 
         if ack.rx_seq_num == circuit.send_state():
-            # All is well
-            pass
+            seq = (ack.rx_seq_num + 127) % 128
+            fut = circuit.info_futures.get(seq)
+            if fut:
+                fut.set_result(True)
         elif ack.rx_seq_num < circuit.send_state():
             # Lagging behind
             pass
@@ -513,7 +532,17 @@ def connected_handler(
         )
         netrom.write_packet(info)
         circuit.sent_info[info.tx_seq_num] = info
+        circuit.info_futures[info.tx_seq_num] = event.future
         circuit.inc_send_state()
+
+        async def check_ack():
+            # TODO need to implement timeout and retry
+            await asyncio.sleep(0.500)
+            if circuit.hw <= info.tx_seq_num:
+                # Retransmit
+                print(f"Retransmit {info}")
+        asyncio.create_task(check_ack())
+
         return NetRomStateType.Connected
 
 
@@ -653,14 +682,6 @@ class NetRomStateMachine:
 
         asyncio.create_task(self._events.put(event))
 
-        # handler = self._handlers[circuit.state]
-        # if handler is None:
-        #     raise RuntimeError(f"No handler for state {handler}")
-        # logger.debug(f"{circuit}, handling {event}")
-        # new_state = handler(circuit, event, self._netrom)
-        # circuit.state = new_state
-        # logger.debug(circuit)
-
     def handle_internal_event(self, event: NetRomStateEvent):
         if event.event_type == NetRomEventType.NL_CONNECT:
             if event.circuit_id == -1:
@@ -673,11 +694,3 @@ class NetRomStateMachine:
             self._circuits[circuit_key] = circuit
 
         asyncio.create_task(self._events.put(event))
-
-        # handler = self._handlers[circuit.state]
-        # if handler is None:
-        #     raise RuntimeError(f"No handler for state {handler}")
-        # logger.debug(f"{circuit}, handling {event}")
-        # new_state = handler(circuit, event, self._netrom)
-        # circuit.state = new_state
-        # logger.debug(circuit)

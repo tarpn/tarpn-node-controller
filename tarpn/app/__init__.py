@@ -1,42 +1,25 @@
+import dataclasses
 from asyncio.protocols import Protocol
+from dataclasses import dataclass
 from typing import Optional
+
+import asyncio
+
+import msgpack
 
 from tarpn.ax25 import AX25Call, parse_ax25_call
 from tarpn.events import EventBus, EventListener
 from tarpn.netrom import NetRom
 
 
-class AppProtocol:
-    def __init__(self):
-        self.transport = None
-        self.circuit_id = None
-
-    def _on_data(self, my_circuit_id: int, remote_call: AX25Call, data: bytes, *args, **kwargs):
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x01)
-        remote_call.write(payload)
-        payload.append(len(data))
-        payload.extend(data)
-        self.transport.write(payload)
-
-    def _on_connect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
-        self.circuit_id = my_circuit_id
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x02)
-        remote_call.write(payload)
-        self.transport.write(payload)
-
-    def _on_disconnect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x03)
-        remote_call.write(payload)
-        self.transport.write(payload)
+@dataclass
+class AppPayload:
+    version: int
+    type: int
+    buffer: bytearray
 
 
-class NetromAppProtocol(AppProtocol, Protocol):
+class NetromAppProtocol(Protocol):
     """
     This protocol runs inside the packet engine and is responsible for managing connections and passing
     messages to the applications over the transport (unix domain socket, or possibly tcp socket)
@@ -48,41 +31,44 @@ class NetromAppProtocol(AppProtocol, Protocol):
         self.app_alias = app_alias
         self.network = network
         self.transport = None
+        self.circuits = {}
+        self.unpacker = msgpack.Unpacker()
+        self.out_queue = asyncio.Queue()
 
     def data_received(self, data: bytes):
-        print("data from socket")
         """
         Receive an event from the application socket.
         """
-        bytes_iter = iter(data)
-        proto_version = next(bytes_iter)
 
-        if proto_version != 0x00:
-            raise RuntimeError(f"Unexpected app protocol version {proto_version}")
+        print("data_received from engine")
+        self.unpacker.feed(data)
+        for unpacked in self.unpacker:
+            print(unpacked)
+            payload = AppPayload(**unpacked)
+            if payload.version != 0:
+                raise RuntimeError(f"Unexpected app protocol version {payload.version}")
 
-        message_type = next(bytes_iter)
-        if message_type == 0x01:  # data
-            remote_call = parse_ax25_call(bytes_iter)
-            data_len = next(bytes_iter)
-            data = bytes(bytes_iter)
-            if len(data) != data_len:
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            if self.circuit_id is not None:
-                self.network.nl_data_request(self.circuit_id, remote_call, self.app_call, data)
+            bytes_iter = iter(payload.buffer)
+            if payload.type == 0x01:  # Data
+                remote_call = parse_ax25_call(bytes_iter)
+                info = bytes(bytes_iter)
+                circuit_id = self.circuits.get(remote_call)
+                if circuit_id is not None:
+                    self.network.nl_data_request(circuit_id, remote_call, self.app_call, info)
+                else:
+                    print("Not connected yet!\r\n".encode("ASCII"))
+            elif payload.type == 0x02:  # Connect
+                remote_call = parse_ax25_call(bytes_iter)
+                self.network.nl_connect_request(remote_call, self.app_call)
+            elif payload.type == 0x03:  # Disconnect
+                remote_call = parse_ax25_call(bytes_iter)
+                circuit_id = self.circuits.get(remote_call)
+                if circuit_id is not None:
+                    self.network.nl_disconnect_request(circuit_id, remote_call, self.app_call)
+                else:
+                    print("Not connected!\r\n".encode("ASCII"))
             else:
-                self.transport.write("Not connected yet!\r\n".encode("ASCII"))
-        elif message_type == 0x02:  # connect
-            remote_call = parse_ax25_call(bytes_iter)
-            if next(bytes_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            self.network.nl_connect_request(remote_call, self.app_call)
-        elif message_type == 0x03:  # disconnect
-            remote_call = parse_ax25_call(bytes_iter)
-            if next(bytes_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            self.network.nl_disconnect_request(self.circuit_id, remote_call, self.app_call)
-        else:  # unknown
-            raise RuntimeError(f"Unknown message type {message_type}")
+                raise RuntimeError(f"Unknown message type {payload.type}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
         print("Connection to socket lost")
@@ -112,3 +98,33 @@ class NetromAppProtocol(AppProtocol, Protocol):
             f"netrom_{self.app_call}_disconnect",
             self._on_disconnect
         ))
+
+        # Start sending outgoing data
+        asyncio.create_task(self.start())
+
+    async def start(self):
+        while True:
+            payload = await self.out_queue.get()
+            if payload:
+                self.transport.write(payload)
+
+    def _on_data(self, my_circuit_id: int, remote_call: AX25Call, data: bytes, *args, **kwargs):
+        payload = AppPayload(0, 1, bytearray())
+        remote_call.write(payload.buffer)
+        payload.buffer.extend(data)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        asyncio.create_task(self.out_queue.put(msg))
+
+    def _on_connect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        self.circuits[remote_call] = my_circuit_id
+        payload = AppPayload(0, 2, bytearray())
+        remote_call.write(payload.buffer)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        asyncio.create_task(self.out_queue.put(msg))
+
+    def _on_disconnect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        payload = AppPayload(0, 3, bytearray())
+        remote_call.write(payload.buffer)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        asyncio.create_task(self.out_queue.put(msg))
+        del self.circuits[remote_call]

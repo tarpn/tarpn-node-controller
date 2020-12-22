@@ -39,6 +39,7 @@ setup(
         'hexdump==3.3',
         'pyserial==3.4',
         'pyserial-asyncio==0.4',
+        'msgpack==1.0.0',
     ],
     extras_require=EXTRA_REQUIRES
 )

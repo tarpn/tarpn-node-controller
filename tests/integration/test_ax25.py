@@ -23,7 +23,7 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         protocol_factory = partial(KISSProtocol, loop, in_queue_1, out_queue_1, port_id=1, check_crc=False)
         (transport_1, protocol_1) = utils.create_test_connection(loop, protocol_factory)
 
-        self.dlm_1 = DataLinkManager(AX25Call("K4DBZ", 1), 0, in_queue_1, out_queue_1, loop.create_future)
+        self.dlm_1 = DataLinkManager(AX25Call("K4DBZ", 1), 1, in_queue_1, out_queue_1, loop.create_future)
         self.transport_1 = cast(utils.TestTransport, transport_1)
         self.protocol_1 = cast(KISSProtocol, protocol_1)
 
@@ -32,7 +32,7 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         protocol_factory = partial(KISSProtocol, loop, in_queue_2, out_queue_2, port_id=1, check_crc=False)
         (transport_2, protocol_2) = utils.create_test_connection(loop, protocol_factory)
 
-        self.dlm_2 = DataLinkManager(AX25Call("K4DBZ", 2), 0, in_queue_2, out_queue_2, loop.create_future)
+        self.dlm_2 = DataLinkManager(AX25Call("K4DBZ", 2), 2, in_queue_2, out_queue_2, loop.create_future)
         self.transport_2 = cast(utils.TestTransport, transport_2)
         self.protocol_2 = cast(KISSProtocol, protocol_2)
 
@@ -46,6 +46,18 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         pass
 
+    async def testConnectRetry(self):
+        asyncio.create_task(self.dlm_1.start())
+        asyncio.create_task(self.dlm_2.start())
+
+        left = asyncio.Queue()
+        right = asyncio.Queue()
+        self.transport_1.start(left, right)
+        self.transport_2.start(right, left)
+
+        self.transport_1.pause_reading()
+        assert not await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
+
     async def testConnectAndDisconnect(self):
         asyncio.create_task(self.dlm_1.start())
         asyncio.create_task(self.dlm_2.start())
@@ -55,20 +67,12 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         self.transport_1.start(left, right)
         self.transport_2.start(right, left)
 
-        async def await_state(state: AX25StateType, timeout_ms=100):
-            start = time.time() * 1000.
-            while (time.time() * 1000. - start) < timeout_ms:
-                if self.dlm_2.state_machine.get_sessions().get(AX25Call("K4DBZ", 1)) == state:
-                    return
-                await asyncio.sleep(0.010)
-            raise AssertionError(f"Timed out waiting for state {state} after {timeout_ms}ms")
+        await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
+
+        for i in range(100):
+            await self.dlm_1.dl_data_request(AX25Call("K4DBZ", 2), L3Protocol.NoLayer3, f"Message {i}".encode("ASCII"))
 
         await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
 
-        fut = self.dlm_1.dl_data_request(AX25Call("K4DBZ", 2), L3Protocol.NoLayer3, "Hello, there".encode("ASCII"))
-        await fut
-
-        await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
-
-        self.dlm_1.dl_disconnect_request(AX25Call("K4DBZ", 2))
-        await await_state(AX25StateType.Disconnected)
+        # self.dlm_1.dl_disconnect_request(AX25Call("K4DBZ", 2))
+        #await await_state(AX25StateType.Disconnected)

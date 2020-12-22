@@ -2,12 +2,15 @@ import configparser
 import re
 import sys
 import os
-from typing import Optional
+from typing import Optional, Dict
 
 _default_settings = {
     "node": {
         "id.message": "Terrestrial Amateur Radio Packet Network node ${node.alias} op is ${node.call}",
-        "id.interval": 600
+        "id.interval": 600,
+        "admin.enabled": False,
+        "admin.listen": "0.0.0.0",
+        "admin.port": 8888
     },
     "network": {
         "netrom.ttl": 7,
@@ -39,10 +42,14 @@ def _default_basedir(app_name):
 
 
 class Settings:
-    def __init__(self, basedir=None, path="config.ini"):
+    def __init__(self, basedir=None, path="config.ini", defaults=None):
         self._init_basedir(basedir)
         self._configfile = os.path.join(self._basedir, path)
         self._config: Optional[configparser.ConfigParser] = None
+        if defaults is None:
+            self._defaults = dict()
+        else:
+            self._defaults = defaults
         self.load()
 
     def _init_basedir(self, basedir):
@@ -60,7 +67,8 @@ class Settings:
                 raise
 
     def load(self):
-        self._config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+        self._config = configparser.ConfigParser(defaults=self._defaults,
+                                                 interpolation=configparser.ExtendedInterpolation())
         self._config.read_dict(_default_settings)
         self._config.read(self._configfile)
 
@@ -136,11 +144,20 @@ class NodeConfig(Config):
     def __init__(self, config_section):
         super().__init__("node", config_section)
 
-    def node_call(self):
+    def node_call(self) -> str:
         return super().get("node.call")
 
-    def node_name(self):
+    def node_name(self) -> str:
         return super().get("node.name")
+
+    def admin_enabled(self) -> bool:
+        return super().get_boolean("admin.enabled")
+
+    def admin_port(self) -> int:
+        return super().get_int("admin.port")
+
+    def admin_listen(self) -> str:
+        return super().get("admin.listen")
 
 
 class PortConfig(Config):

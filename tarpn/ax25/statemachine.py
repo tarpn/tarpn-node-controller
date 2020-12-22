@@ -120,6 +120,7 @@ class AX25State:
     """Represents the internal state of an AX.25 connection. This is used in conjunction with
     the state machine to manage the connection state and interface with the DL (Data-Link) layer
     """
+
     session_id: str
     """Unique key for this state, by default the remote callsign+ssid"""
 
@@ -139,19 +140,56 @@ class AX25State:
     """T3 timer. This is an idle timeout. Ensure's that a link is still alive"""
 
     current_state: AX25StateType = AX25StateType.Disconnected
-    vs: int = 0
-    vr: int = 0
-    va: int = 0
-    rc: int = 0
-    ack_pending: bool = False
-    pending_frames: queue.Queue = queue.Queue()  # (InternalInfo, Future)
-    sent_frames: Dict[int, IFrame] = field(default_factory=dict)
-    futures: Dict[int, Future] = field(default_factory=dict)
 
-    srt: int = 1000
+    vs: int = 0
+    """
+    V(S) Send State Variable
+    The send state variable exists within the TNC and is never sent. It contains the next sequential number to be 
+    assigned to the next transmitted I frame. This variable is updated with the transmission of each I frame.
+    
+    N(S) Send Sequence Number
+    The send sequence number is found in the control field of all I frames. It contains the sequence number of the 
+    I frame being sent. Just prior to the transmission of the I frame, N(S) is updated to equal the send state variable.
+    """
+
+    vr: int = 0
+    """
+    V(R) Receive State Variable
+    The receive state variable exists within the TNC. It contains the sequence number of the next expected received 
+    I frame. This variable is updated upon the reception of an error-free I frame whose send sequence number equals the 
+    present received state variable value.
+    
+    N(R) Received Sequence Number
+    The received sequence number exists in both I and S frames. Prior to sending an I or S frame, this variable is 
+    updated to equal that of the received state variable, thus implicitly acknowledging the proper reception of all 
+    frames up to and including N(R)-1
+    """
+
+    va: int = 0
+    """
+    V(A) Acknowledge State Variable
+    The acknowledge state variable exists within the TNC and is never sent. It contains the sequence number of the last 
+    frame acknowledged by its peer [V(A)-1 equals the N(S) of the last acknowledged I frame].
+    """
+
+    retry_count: int = 0
+    """Seen as RC in the specification"""
+
+    ack_pending: bool = False
+
+    smoothed_roundtrip_time_ms: int = 1000
+    """Seen as SRT in the specification"""
+
     reject_exception: bool = False
+
     layer_3: bool = False
     # TODO other fields
+
+    pending_frames: queue.Queue = queue.Queue()  # (InternalInfo, Future)
+
+    sent_frames: Dict[int, IFrame] = field(default_factory=dict)
+
+    futures: Dict[int, Future] = field(default_factory=dict)
 
     def log_prefix(self):
         return f"AX25 [Id={self.session_id} Local={self.local_call} Remote={self.remote_call} State={self.current_state}]"
@@ -162,7 +200,7 @@ class AX25State:
                local_call: AX25Call,
                internal_event_cb: Callable[[AX25StateEvent], None]):
         new_state = cls(str(remote_call), remote_call, local_call, internal_event_cb)
-        new_state.t1 = Timer(1_000, new_state.t1_timeout)
+        new_state.t1 = Timer(1_000, new_state.t1_timeout)  # TODO configure these
         new_state.t3 = Timer(180_000, new_state.t3_timeout)
         return new_state
 
@@ -176,9 +214,9 @@ class AX25State:
         self.vs = 0
         self.vr = 0
         self.va = 0
-        self.rc = 0
-        self.srt = 1000
-        self.t1.delay = 1000
+        self.retry_count = 0
+        self.smoothed_roundtrip_time_ms = 1_000
+        self.t1.delay = 1_000
         self.t1.cancel()
         self.t3.cancel()
 
@@ -247,7 +285,7 @@ def check_ui(ui_frame: UIFrame, ax25: AX25):
 
 def establish_data_link(state: AX25State, ax25: AX25):
     state.clear_exception_conditions()
-    state.rc = 0
+    state.retry_count = 0
     sabm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                           UnnumberedType.SABM, True)
     ax25.write_packet(sabm)
@@ -271,19 +309,20 @@ def enquiry_response(state: AX25State, ax25: AX25, final=True):
 
 
 def select_t1_value(state: AX25State):
-    if state.rc == 0:
-        srt = 7./8. * state.srt + (1./8. * state.t1.delay) - (1./8. * state.t1.remaining())
-        state.srt = srt
+    if state.retry_count == 0:
+        srt = 7. / 8. * state.smoothed_roundtrip_time_ms + (1. / 8. * state.t1.delay) - (1. / 8. * state.t1.remaining())
+        state.smoothed_roundtrip_time_ms = srt
         state.t1.delay = srt * 2
     else:
-        t1 = pow(2, (state.rc + 1.0)) * state.srt
+        t1 = pow(2, (state.retry_count + 1.0)) * state.smoothed_roundtrip_time_ms
         state.t1.delay = t1
 
 
 def check_iframe_ack(state: AX25State, nr: int):
     if nr == state.get_send_state():
         state.set_ack_state(nr & 0xFF)
-        fut = state.futures.get(nr - 1)
+        vs = (nr + 7) % 8
+        fut = state.futures.get(vs)
         if fut and not fut.done():
             fut.set_result(None)
         state.t1.cancel()
@@ -291,7 +330,8 @@ def check_iframe_ack(state: AX25State, nr: int):
         select_t1_value(state)
     elif nr != state.get_ack_state():
         state.set_ack_state(nr & 0xFF)
-        fut = state.futures.get(nr - 1)
+        vs = (nr + 7) % 8
+        fut = state.futures.get(vs)
         if fut and not fut.done():
             fut.set_result(None)
         state.t1.start()
@@ -363,6 +403,7 @@ def disconnected_handler(
                          internal_info.protocol, internal_info.info)
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_DATA:
+        event.future.set_exception(RuntimeError("Not connected"))
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_CONNECT:
         state.reset()
@@ -425,6 +466,8 @@ def awaiting_connection_handler(
         if not state.layer_3:
             pending = cast(InternalInfo, event.packet)
             state.push_iframe(pending, event.future)
+        else:
+            event.future.set_exception(RuntimeError("Not connected"))
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.IFRAME_READY:
         if not state.layer_3:
@@ -477,8 +520,8 @@ def awaiting_connection_handler(
         ax25.dl_disconnect_indication(state.remote_call, state.local_call)
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.T1_EXPIRE:
-        if state.rc < 4:  # TODO config this
-            state.rc += 1
+        if state.retry_count < 4:  # TODO config this
+            state.retry_count += 1
             sabm = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                                   UnnumberedType.SABM, True)
             ax25.write_packet(sabm)
@@ -490,8 +533,8 @@ def awaiting_connection_handler(
             ax25.dl_disconnect_indication(state.remote_call, state.local_call)
             return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.AX25_FRMR:
-        state.srt = 1000
-        state.t1.delay = state.srt * 2
+        state.smoothed_roundtrip_time_ms = 1000
+        state.t1.delay = state.smoothed_roundtrip_time_ms * 2
         establish_data_link(state, ax25)
         state.layer_3 = True
         return AX25StateType.AwaitingConnection
@@ -513,7 +556,7 @@ def connected_handler(
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.DL_DISCONNECT:
         state.clear_pending_iframes()
-        state.rc = 0
+        state.retry_count = 0
         u_frame = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                                  UnnumberedType.DISC, True)
         ax25.write_packet(u_frame)
@@ -552,11 +595,11 @@ def connected_handler(
         state.pending_frames.task_done()
         return AX25StateType.Connected
     elif event.event_type == AX25EventType.T1_EXPIRE:
-        state.rc = 1
+        state.retry_count = 1
         transmit_enquiry(state, ax25)
         return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.T3_EXPIRE:
-        state.rc = 0
+        state.retry_count = 0
         transmit_enquiry(state, ax25)
         return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.AX25_SABM:
@@ -671,7 +714,7 @@ def timer_recovery_handler(
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.DL_DISCONNECT:
         state.clear_pending_iframes()
-        state.rc = 0
+        state.retry_count = 0
         disc = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                               UnnumberedType.DISC, True)
         ax25.write_packet(disc)
@@ -701,8 +744,8 @@ def timer_recovery_handler(
         state.pending_frames.task_done()
         return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.T1_EXPIRE:
-        if state.rc < 4:
-            state.rc += 1
+        if state.retry_count < 4:
+            state.retry_count += 1
             transmit_enquiry(state, ax25)
             return AX25StateType.TimerRecovery
         else:
@@ -877,6 +920,9 @@ def awaiting_release_handler(
                             UnnumberedType.DM, u_frame.poll_final)
         ax25.write_packet(dm)
         return AX25StateType.AwaitingRelease
+    elif event.event_type == AX25EventType.DL_DATA:
+        event.future.set_exception(RuntimeError("Not connected"))
+        return AX25StateType.AwaitingRelease
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
         pending = cast(InternalInfo, event.packet)
         ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
@@ -917,8 +963,8 @@ def awaiting_release_handler(
         else:
             return AX25StateType.AwaitingRelease
     elif event.event_type == AX25EventType.T1_EXPIRE:
-        if state.rc < 4:
-            state.rc += 1
+        if state.retry_count < 4:
+            state.retry_count += 1
             disc = UFrame.u_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
                                   UnnumberedType.DISC, True)
             ax25.write_packet(disc)

@@ -50,21 +50,47 @@ class TestAX25(unittest.IsolatedAsyncioTestCase):
         state = ax25.state_machine._sessions["K4DBZ-2"]
         assert state.current_state == AX25StateType.AwaitingConnection
 
-    async def test_link(self):
+    async def test_timeout(self):
+        loop = asyncio.get_event_loop()
+
         # TEST-1
         in_queue_1 = asyncio.Queue()
         out_queue_1 = asyncio.Queue()
-        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1)
+        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, loop.create_future)
 
         # TEST-2
         in_queue_2 = asyncio.Queue()
         out_queue_2 = asyncio.Queue()
-        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2)
+        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, loop.create_future)
 
         # TEST-2 connecting to TEST-1
-        dl_connect = AX25StateEvent.dl_connect(AX25Call("TEST", 1), AX25Call("TEST", 2))
-        ax25_2.state_machine._get_or_create_session(AX25Call("TEST", 1), AX25Call("TEST", 2))
-        ax25_2.state_machine.handle_internal_event(dl_connect)
+        ax25_2.dl_connect_request(AX25Call("TEST", 1))
+
+        sabm = await out_queue_2.get()
+        await in_queue_1.put(sabm)
+        await ax25_1._loop()
+
+        ua = await out_queue_1.get()
+        await in_queue_2.put(ua)
+        await ax25_2._loop()
+
+        ax25_2.dl_data_request(AX25Call("TEST", 1), L3Protocol.NoLayer3, "Testing".encode("utf-8"))
+
+    async def test_link(self):
+        loop = asyncio.get_event_loop()
+
+        # TEST-1
+        in_queue_1 = asyncio.Queue()
+        out_queue_1 = asyncio.Queue()
+        ax25_1 = DataLinkManager(AX25Call("TEST", 1), 0, in_queue_1, out_queue_1, loop.create_future)
+
+        # TEST-2
+        in_queue_2 = asyncio.Queue()
+        out_queue_2 = asyncio.Queue()
+        ax25_2 = DataLinkManager(AX25Call("TEST", 2), 0, in_queue_2, out_queue_2, loop.create_future)
+
+        # TEST-2 connecting to TEST-1
+        ax25_2.dl_connect_request(AX25Call("TEST", 1))
 
         # Connect the queues
         async def bridge(source: asyncio.Queue, sink: asyncio.Queue):

@@ -9,6 +9,7 @@ class TestTransport(Transport):
         self._loop = loop
         self._protocol: Protocol = protocol
         self._closed = False
+        self._paused = False
 
     def start(self, inbound: asyncio.Queue, outbound: asyncio.Queue):
         self._outbound = outbound
@@ -16,6 +17,9 @@ class TestTransport(Transport):
 
     async def _run(self, inbound: asyncio.Queue):
         while not self._closed:
+            if self._paused:
+                await asyncio.sleep(0.001)
+                continue
             item = await inbound.get()
             if item:
                 self._protocol.data_received(item)
@@ -33,6 +37,12 @@ class TestTransport(Transport):
     def close(self):
         self._protocol.eof_received()
         self._closed = True
+
+    def pause_reading(self) -> None:
+        self._paused = True
+
+    def resume_reading(self) -> None:
+        self._paused = True
 
 
 def create_test_connection(loop, protocol_factory, *args, **kwargs):

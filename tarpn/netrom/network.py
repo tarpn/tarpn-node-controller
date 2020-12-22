@@ -3,7 +3,7 @@ import datetime
 import json
 import logging
 import os
-from asyncio import Lock
+from asyncio import Lock, AbstractEventLoop
 from dataclasses import dataclass, field
 from itertools import islice
 from operator import attrgetter
@@ -14,7 +14,7 @@ from tarpn.ax25.datalink import DataLinkManager, L3Handler
 from tarpn.events import EventBus, EventListener
 from tarpn.logging import LoggingMixin
 from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet
-from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent
+from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent, NetRomStateType
 from tarpn.settings import NetworkConfig
 from tarpn.util import chunks
 
@@ -261,16 +261,15 @@ def encode_netrom_nodes(nodes: NetRomNodes) -> bytes:
         b.append(dest.quality & 0xff)
     return bytes(b)
 
-
 class NetworkManager(NetRom, L3Handler, LoggingMixin):
-    def __init__(self, config: NetworkConfig):
+    def __init__(self, config: NetworkConfig, loop: AbstractEventLoop):
         self.config = config
         self.sm = NetRomStateMachine(self)
         self.router = RoutingTable(config.node_alias())
         self.l3_apps: Dict[AX25Call, str] = {}
         self.data_links: Dict[int, DataLinkManager] = {}
         self.route_lock = Lock()
-        asyncio.get_event_loop().create_task(self._broadcast_nodes())
+        self.loop = loop
 
         def extra():
             return f"[L4 Call={str(config.node_call())} Alias={config.node_alias()}]"
@@ -278,6 +277,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
     async def start(self):
         self.info("Starting NetworkManager")
+        asyncio.create_task(self._broadcast_nodes_loop())
         await self.sm.start()
 
     def can_handle(self, protocol: L3Protocol) -> bool:
@@ -336,7 +336,9 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
     def nl_data_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call, data: bytes):
         event = NetRomStateEvent.nl_data(my_circuit_id, remote_call, data)
+        event.future = self.loop.create_future()
         self.sm.handle_internal_event(event)
+        return event.future
 
     def nl_data_indication(self, my_circuit_idx: int, my_circuit_id: int,
                            remote_call: AX25Call, local_call: AX25Call, data: bytes):
@@ -344,11 +346,20 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         EventBus.emit(f"netrom.{local_call}.inbound", my_circuit_idx, remote_call, data)
 
     def nl_connect_request(self, remote_call: AX25Call, local_call: AX25Call):
-        # circuit_id of -1 means pick an unused circuit to use
         if remote_call == local_call:
             raise RuntimeError(f"Cannot connect to node's own callsign {local_call}")
+
+        # circuit_id of -1 means pick an unused circuit to use
         nl_connect = NetRomStateEvent.nl_connect(-1, remote_call, local_call)
         self.sm.handle_internal_event(nl_connect)
+
+        async def poll():
+            while True:
+                if self.sm.get_state(nl_connect.circuit_id) == NetRomStateType.Connected:
+                    return nl_connect.circuit_id
+                else:
+                    await asyncio.sleep(0.001)
+        return asyncio.create_task(poll())
 
     def nl_connect_indication(self, my_circuit_idx: int, my_circuit_id: int,
                               remote_call: AX25Call, local_call: AX25Call):
@@ -356,8 +367,16 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         EventBus.emit(f"netrom.{local_call}.connect", my_circuit_idx, remote_call)
 
     def nl_disconnect_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
-        event = NetRomStateEvent.nl_disconnect(my_circuit_id, remote_call, local_call)
-        self.sm.handle_internal_event(event)
+        nl_disconnect = NetRomStateEvent.nl_disconnect(my_circuit_id, remote_call, local_call)
+        self.sm.handle_internal_event(nl_disconnect)
+
+        async def poll():
+            while True:
+                if self.sm.get_state(nl_disconnect.circuit_id) == NetRomStateType.Disconnected:
+                    return nl_disconnect.circuit_id
+                else:
+                    await asyncio.sleep(0.001)
+        return asyncio.create_task(poll())
 
     def nl_disconnect_indication(self, my_circuit_idx: int, my_circuit_id: int,
                                  remote_call: AX25Call, local_call: AX25Call):
@@ -372,9 +391,9 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
             neighbor = self.router.neighbors.get(route)
             #print(f"Trying route {route} to neighbor {neighbor}")
             data_link = self.data_links.get(neighbor.port)
-            try:
+
+            if data_link.link_state(neighbor.call) == AX25StateType.Connected:
                 data_link.dl_data_request(neighbor.call, L3Protocol.NetRom, packet.buffer)
-                #print(f"Routed {packet}")
                 routed = True
                 EventBus.emit("netrom.outbound", [packet])
                 if forward:
@@ -383,9 +402,6 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
                 else:
                     self.info(f"TX: {packet}")
                 break
-            except Exception as e:
-                #print(f"Had an error {e}")
-                pass
 
         if not routed:
             self.warning(f"Could not route packet to {packet.dest}. Possible routes were {possible_routes}")
@@ -393,45 +409,50 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
         return routed
 
-    def bind_data_link(self, data_link: DataLinkManager):
+    def attach_data_link(self, data_link: DataLinkManager):
         self.data_links[data_link.link_port] = data_link
         self.router.our_calls.append(data_link.link_call)
         data_link.add_l3_handler(self)
 
-    def bind_application(self, app_call: AX25Call, app_alias: str):
-        self.router.bind_application(app_call, app_alias)
-        self.l3_apps[app_call] = app_alias
+    def bind(self, l4_call: AX25Call, l4_alias: str):
+        self.router.bind_application(l4_call, l4_alias)
+        self.l3_apps[l4_call] = l4_alias
 
         # Need to bind this here so the application can start sending packets right away
         EventBus.bind(EventListener(
-            f"netrom.{app_call}.outbound",
-            f"netrom_{app_call}_outbound",
-            lambda remote_call, data: self.nl_data_request(remote_call, app_call, data)
+            f"netrom.{l4_call}.outbound",
+            f"netrom_{l4_call}_outbound",
+            lambda remote_call, data: self.nl_data_request(remote_call, l4_call, data)
         ), True)
 
-    def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
+    async def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
         data_link = self.data_links.get(port)
         if data_link.link_state(remote_call) in (AX25StateType.Disconnected, AX25StateType.AwaitingRelease):
             # print(f"Opening data link to {remote_call}")
-            data_link.dl_connect_request(remote_call)
+            done, pending = await asyncio.wait({data_link.dl_connect_request(remote_call)}, timeout=5.000)
+            if len(pending) != 0:
+                self.warning(f"Timed out waiting on data link with {remote_call}")
 
     async def _update_nodes(self, heard_from: AX25Call, heard_on: int, nodes: NetRomNodes):
         async with self.route_lock:
             #print(f"Got Nodes\n{nodes}")
             self.router.update_routes(heard_from, heard_on, nodes)
-            self._maybe_open_data_link(heard_on, heard_from)
+            #self.info(f"New Routing Table: {self.router}")
+            asyncio.create_task(self._maybe_open_data_link(heard_on, heard_from))
             #print(f"New routing table\n{self.router}")
         await asyncio.sleep(10)
 
     async def _broadcast_nodes(self):
+        nodes = self.router.get_nodes()
+        nodes.save(AX25Call.parse(self.config.node_call()), "nodes.json")
+        for dl in self.data_links.values():
+            for nodes_packet in nodes.to_packets(AX25Call.parse(self.config.node_call())):
+                dl.write_packet(nodes_packet)
+
+    async def _broadcast_nodes_loop(self):
         await asyncio.sleep(10)  # initial delay
         while True:
             async with self.route_lock:
                 self.router.prune_routes()
-            nodes = self.router.get_nodes()
-            nodes.save(AX25Call.parse(self.config.node_call()), "nodes.json")
-            for dl in self.data_links.values():
-                for nodes_packet in nodes.to_packets(AX25Call.parse(self.config.node_call())):
-                    dl.write_packet(nodes_packet)
-                    await asyncio.sleep(0.030)  # Small delay between each NODES broadcast
+            await self._broadcast_nodes()
             await asyncio.sleep(self.config.nodes_interval())

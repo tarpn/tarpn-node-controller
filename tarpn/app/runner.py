@@ -1,11 +1,15 @@
 import argparse
 import asyncio
+import dataclasses
 import importlib
 
 from asyncio import Protocol, transports
 from functools import partial
 from typing import Optional
 
+import msgpack
+
+from tarpn.app import AppPayload
 from tarpn.ax25 import parse_ax25_call, AX25Call
 from tarpn.util import backoff
 
@@ -15,30 +19,26 @@ class Context:
         self.transport = transport
 
     def open(self, address):
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x02)
+        payload = AppPayload(0, 2, bytearray())
         ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload)
-        self.transport.write(payload)
+        ax25_address.write(payload.buffer)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        self.transport.write(msg)
 
     def write(self, address, data):
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x01)
+        payload = AppPayload(0, 1, bytearray())
         ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload)
-        payload.append(len(data))
-        payload.extend(data)
-        self.transport.write(payload)
+        ax25_address.write(payload.buffer)
+        payload.buffer.extend(data)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        self.transport.write(msg)
 
     def close(self, address):
-        payload = bytearray()
-        payload.append(0x00)
-        payload.append(0x03)
+        payload = AppPayload(0, 3, bytearray())
         ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload)
-        self.transport.write(payload)
+        ax25_address.write(payload.buffer)
+        msg = msgpack.packb(dataclasses.asdict(payload))
+        self.transport.write(msg)
 
 
 class AppRunnerProtocol(Protocol):
@@ -53,6 +53,7 @@ class AppRunnerProtocol(Protocol):
         self.app_instance = None
         self.transport = None
         self.closed = False
+        self.unpacker = msgpack.Unpacker()
 
     def connection_made(self, transport: transports.BaseTransport) -> None:
         print(f"connection_made to {transport.get_extra_info('peername')}")
@@ -64,34 +65,25 @@ class AppRunnerProtocol(Protocol):
 
     def data_received(self, data: bytes) -> None:
         print("data_received from engine")
-        bytes_iter = iter(data)
-        proto_version = next(bytes_iter)
+        self.unpacker.feed(data)
+        for unpacked in self.unpacker:
+            payload = AppPayload(**unpacked)
+            if payload.version != 0:
+                raise RuntimeError(f"Unexpected app protocol version {payload.version}")
 
-        if proto_version != 0x00:
-            raise RuntimeError(f"Unexpected app protocol version {proto_version}")
-
-        message_type = next(bytes_iter)
-        if message_type == 0x01:  # data
-            remote_call = parse_ax25_call(bytes_iter)
-            data_len = next(bytes_iter)
-            info = bytes(bytes_iter)
-            if next(bytes_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            if len(info) != data_len:
-                raise BufferError(f"Info actual length does not match indicated length. {repr(data)}")
-            getattr(self.app_instance, "on_data")(str(remote_call), info)
-        elif message_type == 0x02:  # connect
-            remote_call = parse_ax25_call(bytes_iter)
-            if next(bytes_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            getattr(self.app_instance, "on_connect")(str(remote_call))
-        elif message_type == 0x03:  # disconnect
-            remote_call = parse_ax25_call(bytes_iter)
-            if next(bytes_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {repr(data)}")
-            getattr(self.app_instance, "on_disconnect")(str(remote_call))
-        else:  # unknown
-            raise RuntimeError(f"Unknown message type {message_type}")
+            bytes_iter = iter(payload.buffer)
+            if payload.type == 0x01:  # Data
+                remote_call = parse_ax25_call(bytes_iter)
+                info = bytes(bytes_iter)
+                getattr(self.app_instance, "on_data")(str(remote_call), info)
+            elif payload.type == 0x02:  # Connect
+                remote_call = parse_ax25_call(bytes_iter)
+                getattr(self.app_instance, "on_connect")(str(remote_call))
+            elif payload.type == 0x03:  # Disconnect
+                remote_call = parse_ax25_call(bytes_iter)
+                getattr(self.app_instance, "on_disconnect")(str(remote_call))
+            else:
+                raise RuntimeError(f"Unknown message type {payload.type}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
         # TODO what now? probably retry the connection forever

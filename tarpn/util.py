@@ -13,7 +13,7 @@ class Timer:
         self.delay = delay
         self._cb = cb
         self._started = 0
-        self._timer: Optional[asyncio.TimerHandle] = None
+        self._timer: Optional[asyncio.Task] = None
 
     def __repr__(self):
         return f"Timer(delay={self.delay}, remaining={self.remaining()})"
@@ -40,7 +40,7 @@ class Timer:
 
     def remaining(self):
         if self.running():
-            return self.delay - (time.time() - self._started)
+            return self.delay - ((time.time() - self._started) * 1000.)
         else:
             return -1
 
@@ -73,3 +73,17 @@ def backoff(start_time, growth_factor, max_time):
     while True:
         next_time = min(max_time, next_time * growth_factor)
         yield next_time
+
+async def shutdown(loop):
+    # Give things a chance to shutdown
+    await asyncio.sleep(1)
+    pending = [task for task in asyncio.all_tasks() if task is not
+               asyncio.tasks.current_task()]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    loop.stop()
+
+
+def graceful_shutdown():
+    asyncio.create_task(shutdown(asyncio.get_running_loop()))

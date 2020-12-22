@@ -89,7 +89,7 @@ class KISSProtocol(asyncio.Protocol):
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
                     logger.debug(f"Received {frame}")
                     if frame.command == KISSCommand.Data:
-                        asyncio.ensure_future(self.inbound.put(
+                        asyncio.create_task(self.inbound.put(
                             PortFrame(self.port_id, frame.data, frame.hdlc_port,
                                       self._data_callback(frame.hdlc_port))))
                     elif frame.command == KISSCommand.SetHardware:
@@ -123,15 +123,14 @@ class KISSProtocol(asyncio.Protocol):
 
     async def start(self):
         while not self._stopped:
-            await self._loop()
+            frame = await self.outbound.get()
+            if frame:
+                try:
+                    await asyncio.wait_for(self._loop_sync(frame), 5)
+                finally:
+                    self.outbound.task_done()
 
-    async def _loop(self):
-        frame: PortFrame = await self.outbound.get()
-        if frame:
-            self._loop_sync(frame)
-            self.outbound.task_done()
-
-    def _loop_sync(self, frame: PortFrame):
+    async def _loop_sync(self, frame: PortFrame):
         kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
         kiss_data = encode_kiss_frame(kiss_frame, False)
         self.transport.write(kiss_data)
