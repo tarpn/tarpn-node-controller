@@ -109,7 +109,7 @@ class TTY:
 
     def handle_connect(self, circuit_id: int, remote_call: AX25Call):
         print(f"Connected to {remote_call} on circuit {circuit_id}")
-        print("> ")
+        sys.stdout.write("> ")
         self.connected = True
         self.circuit_id = circuit_id
 
@@ -117,7 +117,7 @@ class TTY:
         print(f"Disconnected from {remote_call}")
         self.connected = False
         self.circuit_id = None
-        exit(0)
+        graceful_shutdown()
 
     def handle_stdin(self):
         line = sys.stdin.readline().strip()
@@ -126,34 +126,6 @@ class TTY:
     def handle_data(self, circuit_id: int, remote_call: AX25Call, data: bytes):
         msg = str(data, 'utf-8')
         sys.stdout.write(msg)
-
-
-class Monitor(asyncio.Protocol):
-    def __init__(self):
-        self.transport = None
-        self.client_host = None
-        self.client_port = None
-
-    def connection_made(self, transport: transports.BaseTransport) -> None:
-        (host, port) = transport.get_extra_info('peername')
-        self.transport = transport
-        self.client_host = host
-        self.client_port = port
-
-        def write_event(event):
-            transport.write(repr(event).encode("utf-8"))
-
-        EventBus.bind(EventListener(
-            "packet",
-            f"tcp.monitor.{port}",
-            write_event))
-
-    def connection_lost(self, exc: Optional[Exception]) -> None:
-        EventBus.remove(f"tcp.monitor.{self.client_port}")
-
-    def eof_received(self) -> Optional[bool]:
-        EventBus.remove(f"tcp.monitor.{self.client_port}")
-        return
 
 
 def handle_signal(dlm, tty, loop):
@@ -222,6 +194,7 @@ def main():
 
     if args.debug:
         main_logger.setLevel(logging.DEBUG)
+
         state_logger = logging.getLogger("ax25.state")
         state_logger.setLevel(logging.DEBUG)
         state_logger.addHandler(logging.StreamHandler(sys.stdout))

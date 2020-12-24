@@ -29,7 +29,7 @@ class DataLinkTransport(Transport):
         self.datalink.dl_disconnect_request(self.remote_call)
 
 
-class NodeHandler(L3Handler):
+class DataLinkAdapter(L3Handler):
     def __init__(self, datalink: DataLinkManager, protocol_factory: Callable[[], Protocol]):
         self.datalink = datalink
         self.protocol_factory = protocol_factory
@@ -48,6 +48,50 @@ class NodeHandler(L3Handler):
         app.data_received(data)
         return True
 
+
+class NetworkTransport(Transport):
+    def __init__(self, network: NetRom, local_call: AX25Call, remote_call: AX25Call, circuit_id: int):
+        Transport.__init__(self, extra={"peername": (str(remote_call), circuit_id)})
+        self.network = network
+        self.remote_call = remote_call
+        self.local_call = local_call
+        self.circuit_id = circuit_id
+
+    def write(self, data: Any) -> None:
+        self.network.nl_data_request(self.circuit_id, self.remote_call, self.local_call, data)
+
+    def close(self) -> None:
+        # TODO what about connectionless?
+        self.network.nl_disconnect_request(self.circuit_id, self.remote_call, self.local_call)
+
+
+class NetworkAdapter:
+    def __init__(self, local_call: AX25Call, network: NetRom, protocol_factory: Callable[[], Protocol]):
+        self.local_call = local_call
+        self.network = network
+        self.protocol_factory = protocol_factory
+        self.app_instances: Dict[int, Protocol] = dict()
+
+    def on_data(self, my_circuit_id: int, remote_call: AX25Call, data: bytes, *args, **kwargs):
+        protocol = self.app_instances.get(my_circuit_id)
+        if protocol:
+            protocol.data_received(data)
+        else:
+            pass  # TODO error?
+
+    def on_connect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        protocol = self.protocol_factory()
+        transport = NetworkTransport(self.network, self.local_call, remote_call, my_circuit_id)
+        protocol.connection_made(transport)
+        self.app_instances[my_circuit_id] = protocol
+
+    def on_disconnect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        protocol = self.app_instances.get(my_circuit_id)
+        if protocol:
+            protocol.connection_lost(None)
+            del self.app_instances[my_circuit_id]
+        else:
+            pass  # TODO error?
 
 class NodeApplication(Protocol, LoggingMixin):
     """

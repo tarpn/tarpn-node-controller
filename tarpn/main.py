@@ -6,9 +6,10 @@ import sys
 from functools import partial
 
 from tarpn.app import NetromAppProtocol
-from tarpn.app.sysop import NodeApplication, NodeHandler
+from tarpn.app.sysop import NodeApplication, DataLinkAdapter, NetworkAdapter
 from tarpn.ax25 import AX25Call
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
+from tarpn.events import EventBus, EventListener
 from tarpn.netrom.network import NetworkManager
 from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import Settings
@@ -58,7 +59,26 @@ async def main_async():
 
     node_app_factory = partial(NodeApplication, s, dlms, nl)
     for dlm in dlms:
-        dlm.add_l3_handler(NodeHandler(dlm, node_app_factory))
+        dlm.add_l3_handler(DataLinkAdapter(dlm, node_app_factory))
+
+    # Make a default application for L4
+    node_call = s.network_configs().node_call()
+    adaptor = NetworkAdapter(node_call, nl, node_app_factory)
+    EventBus.bind(EventListener(
+        f"netrom.{node_call}.inbound",
+        f"netrom_{node_call}_inbound",
+        adaptor.on_data
+    ))
+    EventBus.bind(EventListener(
+        f"netrom.{node_call}.connect",
+        f"netrom_{node_call}_connect",
+        adaptor.on_connect
+    ))
+    EventBus.bind(EventListener(
+        f"netrom.{node_call}.disconnect",
+        f"netrom_{node_call}_disconnect",
+        adaptor.on_disconnect
+    ))
 
     if node_settings.admin_enabled():
         await loop.create_server(protocol_factory=node_app_factory,

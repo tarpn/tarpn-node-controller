@@ -261,6 +261,7 @@ def encode_netrom_nodes(nodes: NetRomNodes) -> bytes:
         b.append(dest.quality & 0xff)
     return bytes(b)
 
+
 class NetworkManager(NetRom, L3Handler, LoggingMixin):
     def __init__(self, config: NetworkConfig, loop: AbstractEventLoop):
         self.config = config
