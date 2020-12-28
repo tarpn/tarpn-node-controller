@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import partial
 from itertools import cycle
 import logging
 from typing import Optional, cast, Dict
@@ -10,6 +11,7 @@ from asyncio import Future
 from tarpn.ax25 import AX25Call
 from tarpn.logging import LoggingMixin
 from tarpn.netrom import NetRomPacket, NetRomConnectRequest, NetRomConnectAck, OpType, NetRom, NetRomInfo
+from tarpn.util import Timer
 
 
 class NetRomEventType(Enum):
@@ -108,6 +110,7 @@ class NetRomCircuit:
     hw: int = 0  # High-watermark for acknowledged data
     ack_pending: bool = False
     state: NetRomStateType = NetRomStateType.Disconnected
+    timer: Timer = field(default=None, repr=False)
 
     more: bytes = bytearray()
     sent_info: Dict[int, NetRomInfo] = field(default_factory=dict)
@@ -191,6 +194,7 @@ def disconnected_handler(
         circuit.remote_circuit_idx = connect_req.circuit_idx
         if netrom.write_packet(connect_ack):
             netrom.nl_connect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+            circuit.timer.reset()
             return NetRomStateType.Connected
         else:
             return NetRomStateType.Disconnected
@@ -233,6 +237,7 @@ def disconnected_handler(
         )
         netrom.write_packet(disc_ack)
         netrom.nl_disconnect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+        circuit.timer.cancel()
         return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NL_CONNECT:
         conn = NetRomConnectRequest(
@@ -249,6 +254,7 @@ def disconnected_handler(
             circuit.local_call,  # Origin node
         )
         if netrom.write_packet(conn):
+            circuit.timer.start()
             return NetRomStateType.AwaitingConnection
         else:
             return NetRomStateType.Disconnected
@@ -275,6 +281,7 @@ def awaiting_connection_handler(
             circuit.remote_circuit_id = ack.tx_seq_num
             circuit.window_size = ack.accept_window_size
             netrom.nl_connect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+            circuit.timer.reset()
             return NetRomStateType.Connected
         else:
             logger.debug("Unexpected circuit id in connection ack")
@@ -297,6 +304,7 @@ def awaiting_connection_handler(
             circuit.local_call  # Origin node
         )
         netrom.write_packet(conn)
+        circuit.timer.reset()
         return NetRomStateType.AwaitingConnection
     elif event.event_type in (NetRomEventType.NL_DISCONNECT, NetRomEventType.NL_DATA):
         return NetRomStateType.AwaitingConnection
@@ -326,6 +334,7 @@ def connected_handler(
             )
             netrom.write_packet(connect_ack)
             netrom.nl_connect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+            circuit.timer.reset()
             return NetRomStateType.Connected
         else:
             # Reject this and disconnect
@@ -343,6 +352,7 @@ def connected_handler(
             )
             netrom.write_packet(connect_rej)
             netrom.nl_disconnect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+            circuit.timer.cancel()
             return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NETROM_CONNECT_ACK:
         connect_ack = cast(NetRomConnectAck, event.packet)
@@ -351,6 +361,7 @@ def connected_handler(
                 connect_ack.circuit_idx == circuit.circuit_idx and \
                 connect_ack.circuit_id == circuit.circuit_id:
             netrom.nl_connect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+            circuit.timer.reset()
             return NetRomStateType.Connected
         else:
             #  TODO what now?
@@ -368,6 +379,7 @@ def connected_handler(
         )
         netrom.write_packet(disc_ack)
         netrom.nl_disconnect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+        circuit.timer.cancel()
         return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NETROM_DISCONNECT_ACK:
         logger.debug("Unexpected disconnect ack in connected state!")
@@ -505,6 +517,7 @@ def connected_handler(
             circuit.local_call,  # Origin node
         )
         netrom.write_packet(conn)
+        circuit.timer.reset()
         return NetRomStateType.AwaitingConnection
     elif event.event_type == NetRomEventType.NL_DISCONNECT:
         disc = NetRomPacket(
@@ -517,6 +530,7 @@ def connected_handler(
             0,
             OpType.DisconnectRequest.as_op_byte(False, False, False))
         netrom.write_packet(disc)
+        circuit.timer.cancel()
         return NetRomStateType.AwaitingRelease
     elif event.event_type == NetRomEventType.NL_DATA:
         info = NetRomInfo(
@@ -573,6 +587,7 @@ def awaiting_release_handler(
         )
         netrom.write_packet(disc_ack)
         netrom.nl_disconnect_indication(circuit.circuit_idx, circuit.circuit_id, circuit.remote_call, circuit.local_call)
+        circuit.timer.cancel()
         return NetRomStateType.Disconnected
     else:
         # TODO handle any other cases differently?
@@ -645,6 +660,7 @@ class NetRomStateMachine:
             if next_circuit_id == -1:
                 return None  # TODO handle this case
             circuit = NetRomCircuit(next_circuit_id, next_circuit_id, netrom_packet.origin, netrom_packet.dest)
+            circuit.timer = Timer(10_000, partial(self.handle_timeout, next_circuit_id))
             circuit_key = f"{next_circuit_id:02d}:{next_circuit_id:02d}"
             self._circuits[circuit_key] = circuit
         elif isinstance(netrom_packet, NetRomConnectAck):
@@ -661,6 +677,7 @@ class NetRomStateMachine:
                 self._logger.warning(f"Creating new circuit for packet {netrom_packet}")
                 circuit = NetRomCircuit(netrom_packet.circuit_idx, netrom_packet.circuit_id, netrom_packet.origin,
                                         netrom_packet.dest)
+                circuit.timer = Timer(10_000, partial(self.handle_timeout, netrom_packet.circuit_idx))
                 self._circuits[circuit_key] = circuit
         return circuit
 
@@ -690,7 +707,11 @@ class NetRomStateMachine:
                 circuit_id = event.circuit_id
             event.circuit_id = circuit_id
             circuit = NetRomCircuit(circuit_id, circuit_id, event.remote_call, self._netrom.local_call())
+            circuit.timer = Timer(10_000, partial(self.handle_timeout, circuit_id))
             circuit_key = f"{circuit.circuit_idx:02d}:{circuit.circuit_id:02d}"
             self._circuits[circuit_key] = circuit
 
         asyncio.create_task(self._events.put(event))
+
+    def handle_timeout(self, circuit_id: int):
+        pass

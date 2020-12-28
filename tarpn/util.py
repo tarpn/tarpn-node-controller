@@ -35,6 +35,10 @@ class Timer:
             self._timer.cancel()
             self._timer = None
 
+    def reset(self):
+        self.cancel()
+        self.start()
+
     def running(self):
         return self._timer is not None
 

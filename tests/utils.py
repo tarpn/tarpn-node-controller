@@ -1,5 +1,5 @@
 import asyncio
-from asyncio import Protocol, BaseProtocol, Transport
+from asyncio import Protocol, BaseProtocol, Transport, AbstractEventLoop
 from typing import Any
 
 
@@ -50,3 +50,21 @@ def create_test_connection(loop, protocol_factory, *args, **kwargs):
     transport = TestTransport(loop, protocol)
     protocol.connection_made(transport)
     return (transport, protocol)
+
+
+class MockTime:
+    def __init__(self, loop: AbstractEventLoop, initial_time: int):
+        loop.time = self
+        self._loop = loop
+        self._time = initial_time
+
+    def __call__(self):
+        return self._time
+
+    def sleep(self, sec, tick=True):
+        self._time += sec
+        if tick:
+            self._loop._run_once()
+
+    def tick(self):
+        self._loop._run_once()
