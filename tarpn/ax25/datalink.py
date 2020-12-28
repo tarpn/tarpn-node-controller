@@ -173,7 +173,7 @@ class DataLinkManager(AX25, LoggingMixin):
                 break
 
         if not handled:
-            self.warning(f"No handler defined for protocol {repr(protocol)}. Discarding")
+            self.debug(f"No handler defined for protocol {repr(protocol)}. Discarding")
 
     def write_packet(self, packet: AX25Packet):
         if packet.dest == AX25Call("NODES"):

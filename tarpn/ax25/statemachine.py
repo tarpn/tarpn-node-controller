@@ -185,11 +185,11 @@ class AX25State:
     layer_3: bool = False
     # TODO other fields
 
-    pending_frames: queue.Queue = queue.Queue()  # (InternalInfo, Future)
+    pending_frames: queue.Queue = field(default_factory=queue.Queue, repr=False)  # (InternalInfo, Future)
 
-    sent_frames: Dict[int, IFrame] = field(default_factory=dict)
+    sent_frames: Dict[int, IFrame] = field(default_factory=dict, repr=False)
 
-    futures: Dict[int, Future] = field(default_factory=dict)
+    futures: Dict[int, Future] = field(default_factory=dict, repr=False)
 
     def log_prefix(self):
         return f"AX25 [Id={self.session_id} Local={self.local_call} Remote={self.remote_call} State={self.current_state}]"
@@ -240,25 +240,34 @@ class AX25State:
         return self.vs % 8
 
     def set_send_state(self, vs: int):
+        #self.print_window()
         self.vs = vs
 
     def inc_send_state(self):
+        #self.print_window()
         self.vs += 1
 
     def get_recv_state(self):
         return self.vr % 8
 
     def set_recv_state(self, vr):
+        #self.print_window()
         self.vr = vr
 
     def inc_recv_state(self):
+        #self.print_window()
         self.vr += 1
 
     def get_ack_state(self):
         return self.va & 0xFF
 
     def set_ack_state(self, va):
+        #self.print_window()
         self.va = va & 0xFF
+
+    def print_window(self):
+        print(f"{self.local_call} V(A)={self.get_ack_state()} V(R)={self.get_recv_state()} V(S)={self.get_send_state()}"
+              f" window_exceeded={self.window_exceeded()}")
 
     def window_exceeded(self):
         """If V(S) is equal to V(A) + window size (7) means we can't transmit any more until we get an ACK"""

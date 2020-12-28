@@ -324,6 +324,9 @@ class InternalInfo(AX25Packet):
     protocol: L3Protocol
     info: bytes
 
+    def __repr__(self):
+        return f"Pending IFrame(protocol={self.protocol} info={self.info})"
+
     @classmethod
     def internal_info(cls, protocol: L3Protocol, info: bytes):
         return InternalInfo(bytes(), AX25Call(), AX25Call(), [], 0x00, protocol, info)
