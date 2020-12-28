@@ -6,7 +6,7 @@ import unittest
 from functools import partial
 from typing import cast
 
-from tarpn.ax25 import AX25Call, AX25StateType, L3Protocol
+from tarpn.ax25 import AX25Call, AX25StateType, L3Protocol, L3Handler
 from tarpn.ax25.datalink import DataLinkManager
 from tarpn.port.kiss import KISSProtocol
 from tests import utils
@@ -36,12 +36,17 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         self.transport_2 = cast(utils.TestTransport, transport_2)
         self.protocol_2 = cast(KISSProtocol, protocol_2)
 
-        logger = logging.getLogger("main")
-        logger.setLevel(logging.INFO)
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.DEBUG)
+
+        logger = logging.getLogger("main")
+        logger.setLevel(logging.WARNING)
         logger.addHandler(handler)
+
+        state_logger = logging.getLogger("ax25.state")
+        state_logger.setLevel(logging.DEBUG)
+        state_logger.addHandler(handler)
 
     def tearDown(self):
         pass
@@ -58,7 +63,21 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         self.transport_1.pause_reading()
         assert not await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
 
-    async def testConnectAndDisconnect(self):
+    async def testWindowSize(self):
+        class CaptureHandler(L3Handler):
+            def __init__(self):
+                L3Handler.__init__(self)
+                self.captured = []
+
+            def can_handle(self, protocol: L3Protocol) -> bool:
+                return protocol == L3Protocol.NoLayer3
+
+            def handle(self, port: int, remote_call: AX25Call, data: bytes) -> bool:
+                self.captured.append(data)
+                return False
+
+        capture = CaptureHandler()
+        self.dlm_2.add_l3_handler(capture)
         asyncio.create_task(self.dlm_1.start())
         asyncio.create_task(self.dlm_2.start())
 
@@ -70,9 +89,13 @@ class TestTwoNodes(unittest.IsolatedAsyncioTestCase):
         await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
 
         for i in range(100):
-            await self.dlm_1.dl_data_request(AX25Call("K4DBZ", 2), L3Protocol.NoLayer3, f"Message {i}".encode("ASCII"))
+            await self.dlm_1.dl_data_request(AX25Call("K4DBZ", 2), L3Protocol.NoLayer3, f"Message {i:03}".encode("ASCII"))
 
-        await self.dlm_2.dl_connect_request(AX25Call("K4DBZ", 1))
+        # Wait for any remaining in-flight packets to get acked
+        await asyncio.sleep(3)
 
-        # self.dlm_1.dl_disconnect_request(AX25Call("K4DBZ", 2))
-        #await await_state(AX25StateType.Disconnected)
+        assert len(capture.captured) == 100
+        in_order = capture.captured.copy()
+        sorted(in_order)
+        print(capture.captured)
+        assert capture.captured == in_order

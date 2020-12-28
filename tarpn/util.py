@@ -54,6 +54,13 @@ def chunks(lst, n):
             yield lst[i:i + n]
 
 
+def between(x, lo, hi, inclusive=True):
+    if inclusive:
+        return lo <= x <= hi
+    else:
+        return lo < x < hi
+
+
 def load_plugins():
     import pkg_resources
 

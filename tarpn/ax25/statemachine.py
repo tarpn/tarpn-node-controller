@@ -14,7 +14,7 @@ from typing import Callable, cast, Dict, Optional, List
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
     L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25, AX25StateType
 from tarpn.logging import LoggingMixin
-from tarpn.util import Timer
+from tarpn.util import Timer, between
 
 
 class AX25EventType(Enum):
@@ -349,6 +349,15 @@ def check_need_for_response(state: AX25State, ax25: AX25, s_frame: SFrame):
         ax25.dl_error(state.remote_call, state.local_call, "A")
 
 
+def check_nr(state: AX25State, nr: int):
+    if state.get_send_state() < state.get_ack_state():
+        # Window wrap-around case
+        return between(nr, state.get_ack_state(), 7) or \
+                between(nr, 0, state.get_send_state())
+    else:
+        return between(nr, state.get_ack_state(), state.get_send_state())
+
+
 def nr_error_recovery(state: AX25State, ax25: AX25):
     ax25.dl_error(state.remote_call, state.local_call, "J")
     establish_data_link(state, ax25)
@@ -587,7 +596,9 @@ def connected_handler(
             ax25.write_packet(i_frame)
             state.sent_frames[state.get_send_state()] = i_frame
             state.futures[state.get_send_state()] = future
-            state.vs += 1
+            # Complete the future indicating the DL_DATA event was sent out
+            future.set_result(None)
+            state.inc_send_state()
             state.ack_pending = False
             if state.t1.running():
                 state.t3.cancel()
@@ -654,17 +665,19 @@ def connected_handler(
         # TODO set peer busy if RNR, else clear peer busy
         s_frame = cast(SFrame, event.packet)
         check_need_for_response(state, ax25, s_frame)
-        if s_frame.receive_seq_number <= state.get_send_state():
+
+        if check_nr(state, s_frame.receive_seq_number):
             check_iframe_ack(state, s_frame.receive_seq_number)
             return AX25StateType.Connected
         else:
-            logger.debug("N(R) error recovery, re-establishing connection")
+            logger.warning(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={s_frame.receive_seq_number} "
+                           f"V(S)={state.get_send_state()}")
             nr_error_recovery(state, ax25)
             return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_INFO:
         i_frame = cast(IFrame, event.packet)
         if i_frame.get_command() == SupervisoryCommand.Command:
-            if state.get_ack_state() <= i_frame.receive_seq_number <= state.get_send_state():
+            if check_nr(state, i_frame.receive_seq_number):
                 check_iframe_ack(state, i_frame.receive_seq_number)
                 if i_frame.send_seq_number == state.get_recv_state():
                     state.inc_recv_state()
@@ -686,7 +699,8 @@ def connected_handler(
                         ax25.write_packet(rej)
                 return AX25StateType.Connected
             else:
-                logger.debug("N(R) error recovery, re-establishing connection")
+                logger.warning(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={i_frame.receive_seq_number} "
+                               f"V(S)={state.get_send_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:
@@ -798,7 +812,7 @@ def timer_recovery_handler(
             """
             state.t1.cancel()
             select_t1_value(state)
-            if state.get_send_state() >= state.get_recv_state() >= state.get_ack_state():
+            if check_nr(state, s_frame.receive_seq_number):
                 state.set_ack_state(s_frame.receive_seq_number)
                 if state.get_send_state() == state.get_ack_state():
                     state.t3.start()
@@ -809,18 +823,20 @@ def timer_recovery_handler(
                     invoke_retransmission(state, ax25)
                     return AX25StateType.TimerRecovery
             else:
-                logger.debug("N(r) error recover")
+                logger.warning(f"N(R) error recovery, V(S)={state.get_send_state()} N(R)={s_frame.receive_seq_number} "
+                               f"V(A)={state.get_ack_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:
             if s_frame.get_command() == SupervisoryCommand.Command and s_frame.poll_final:
                 enquiry_response(state, ax25)
-            if state.get_ack_state() <= state.get_recv_state() <= state.get_send_state():
+            if check_nr(state, state.get_recv_state()):
                 state.set_ack_state(s_frame.receive_seq_number)
                 logger.debug("Still in timer recovery")
                 return AX25StateType.TimerRecovery
             else:
-                logger.debug("N(r) error recovery")
+                logger.warning(f"N(R) error recovery, V(S)={state.get_send_state()} V(R)={state.get_recv_state()} "
+                               f"V(A)={state.get_ack_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_DISC:
@@ -860,7 +876,7 @@ def timer_recovery_handler(
     elif event.event_type == AX25EventType.AX25_INFO:
         i_frame = cast(IFrame, event.packet)
         if i_frame.get_command() == SupervisoryCommand.Command:
-            if i_frame.receive_seq_number <= state.get_send_state():
+            if check_nr(state, i_frame.receive_seq_number):
                 check_iframe_ack(state, i_frame.receive_seq_number)
                 if i_frame.send_seq_number == state.get_recv_state():
                     state.inc_recv_state()
@@ -883,6 +899,7 @@ def timer_recovery_handler(
                         state.ack_pending = False
                 return AX25StateType.TimerRecovery
             else:
+                logger.warning(f"N(R) error recovery, N(R)={i_frame.receive_seq_number} V(S)={state.get_send_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:
