@@ -19,7 +19,7 @@ class TestKiss(unittest.IsolatedAsyncioTestCase):
         kiss_protocol = cast(KISSProtocol, protocol)
         test_transport = cast(tests.utils.TestTransport, transport)
 
-        kiss_protocol._loop_sync(PortFrame(0, "Testing".encode("ascii")))
+        kiss_protocol.loop_once(PortFrame(0, "Testing".encode("ascii")))
         data = test_transport.captured_writes()[0]
 
         test_transport.read(data)

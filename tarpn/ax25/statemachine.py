@@ -1063,7 +1063,8 @@ class AX25StateMachine:
 
     def log(self, state: AX25State, msg: str, *args, **kwargs):
         self._logger.info(f"[Id={state.session_id} Local={state.local_call} Remote={state.remote_call} "
-                          f"State={state.current_state}] {msg}")
+                          f"State={state.current_state}] V(A)={state.get_ack_state()} V(R)={state.get_recv_state()} "
+                          f"V(S)={state.get_send_state()} {msg}")
 
     def _get_or_create_session(self, remote_call: AX25Call, local_call: AX25Call) -> AX25State:
         session_id = str(remote_call)
@@ -1092,9 +1093,9 @@ class AX25StateMachine:
             raise RuntimeError(f"No handler for {handler}")
         deferred = DeferredAX25(self._ax25)
         logger = LoggingMixin(self._logger, state.log_prefix)
-        logger.debug(f"Handling {event}")
         new_state = handler(state, event, deferred, logger)
         state.current_state = new_state
+        logger.debug(f"Handled {event}")
         deferred.apply()
 
     def handle_internal_event(self, event: AX25StateEvent):
@@ -1110,7 +1111,7 @@ class AX25StateMachine:
             raise RuntimeError(f"No handler for {handler}")
         deferred = DeferredAX25(self._ax25)
         logger = LoggingMixin(self._logger, state.log_prefix)
-        logger.debug(f"Handling {event}")
         new_state = handler(state, event, deferred, logger)
         state.current_state = new_state
+        logger.debug(f"Handled {event}")
         deferred.apply()

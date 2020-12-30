@@ -19,6 +19,9 @@ from tarpn.settings import NetworkConfig
 from tarpn.util import chunks
 
 
+packet_logger = logging.getLogger("packet")
+
+
 @dataclass
 class Neighbor:
     call: AX25Call
@@ -314,7 +317,8 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         """If packet is for us, handle it, otherwise forward it using our L3 routing table"""
 
         EventBus.emit("netrom.incoming", [netrom_packet])
-        self.info(f"RX: {netrom_packet}")
+        self.debug(f"RX: {netrom_packet}")
+        packet_logger.info(f"RX: {netrom_packet}")
 
         if netrom_packet.dest == AX25Call("KEEPLI-0"):
             # What are these?? Just ignore them
@@ -401,7 +405,8 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
                     # Log this transmission differently if it's being forwarded
                     self.logger.info(f"[L3 Route={route} Neighbor={neighbor.call}] TX: {packet}")
                 else:
-                    self.info(f"TX: {packet}")
+                    self.debug(f"TX: {packet}")
+                    packet_logger.info(f"TX: {packet}")
                 break
 
         if not routed:

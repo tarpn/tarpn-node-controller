@@ -13,6 +13,9 @@ from tarpn.events import EventBus
 from tarpn.logging import LoggingMixin
 
 
+packet_logger = logging.getLogger("packet")
+
+
 class DataLinkManager(AX25, LoggingMixin):
     """
     In the AX.25 spec, this is the Link Multiplexer. It accepts packets from a single physical device and
@@ -64,7 +67,8 @@ class DataLinkManager(AX25, LoggingMixin):
             if packet.dest == AX25Call("NODES"):
                 self.debug(f"RX: {packet}")
             else:
-                self.info(f"RX: {packet}")
+                self.debug(f"RX: {packet}")
+            packet_logger.info(f"RX: {packet}")
             EventBus.emit("packet", [packet])
         except Exception:
             self.exception(f"Had an error parsing packet: {frame}")
@@ -179,7 +183,8 @@ class DataLinkManager(AX25, LoggingMixin):
         if packet.dest == AX25Call("NODES"):
             self.debug(f"TX: {packet}")
         else:
-            self.info(f"TX: {packet}")
+            self.debug(f"TX: {packet}")
+        packet_logger.info(f"TX: {packet}")
         frame = PortFrame(self.link_port, packet.buffer, 0)
         asyncio.create_task(self.outbound.put(frame))
 

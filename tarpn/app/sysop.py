@@ -4,8 +4,6 @@ from asyncio import Protocol, Transport
 import shlex
 from typing import Optional, List, Any, Dict, Callable
 
-import asyncio
-
 from tarpn.ax25 import AX25Call, AX25StateType, L3Protocol
 from tarpn.ax25.datalink import DataLinkManager, L3Handler
 from tarpn.events import EventListener, EventBus
@@ -70,28 +68,45 @@ class NetworkAdapter:
         self.local_call = local_call
         self.network = network
         self.protocol_factory = protocol_factory
-        self.app_instances: Dict[int, Protocol] = dict()
+        self.app_instances: Dict[int, NodeApplication] = dict()
 
     def on_data(self, my_circuit_id: int, remote_call: AX25Call, data: bytes, *args, **kwargs):
+        """Callback for netrom.{local_call}.data events"""
+
         protocol = self.app_instances.get(my_circuit_id)
         if protocol:
             protocol.data_received(data)
         else:
-            pass  # TODO error?
+            # Ignore
+            pass
 
     def on_connect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
-        protocol = self.protocol_factory()
-        transport = NetworkTransport(self.network, self.local_call, remote_call, my_circuit_id)
-        protocol.connection_made(transport)
-        self.app_instances[my_circuit_id] = protocol
+        """Callback for netrom.{local_call}.connect events"""
+
+        # If this connection initiated by the app itself, we don't want to attach a new transport
+        found = False
+        for apps in self.app_instances.values():
+            if apps.attached_circuit == my_circuit_id:
+                found = True
+                break
+
+        if not found:
+            protocol = self.protocol_factory()
+            transport = NetworkTransport(self.network, self.local_call, remote_call, my_circuit_id)
+            protocol.connection_made(transport)
+            self.app_instances[my_circuit_id] = protocol
 
     def on_disconnect(self, my_circuit_id: int, remote_call: AX25Call, *args, **kwargs):
+        """Callback for netrom.{local_call}.disconnect events"""
+
         protocol = self.app_instances.get(my_circuit_id)
         if protocol:
             protocol.connection_lost(None)
             del self.app_instances[my_circuit_id]
         else:
-            pass  # TODO error?
+            # Ignore
+            pass
+
 
 class NodeApplication(Protocol, LoggingMixin):
     """

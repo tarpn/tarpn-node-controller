@@ -1,3 +1,4 @@
+import time
 from functools import partial
 from typing import NamedTuple, Callable
 from enum import IntEnum, unique
@@ -9,6 +10,7 @@ import serial_asyncio
 
 from tarpn.port import PortFrame, logger
 from tarpn.settings import PortConfig
+from tarpn.util import backoff
 
 logger = logging.getLogger("kiss")
 
@@ -73,11 +75,14 @@ class KISSProtocol(asyncio.Protocol):
         self.msgs_recvd = 0
         self.in_frame = False
         self._buffer = bytearray()
-        self._stopped = False
+        self.closed = False
 
     def connection_made(self, transport):
         logger.info(f"Opened connection on {transport}")
         self.transport = transport
+        self.closed = False
+        self.in_frame = False
+        self._buffer.clear()
         self.loop.create_task(self.start())
 
     def data_received(self, data):
@@ -87,6 +92,8 @@ class KISSProtocol(asyncio.Protocol):
             if b == KISSMagic.FEND:
                 if self.in_frame:
                     frame = decode_kiss_frame(self._buffer, self.check_crc)
+                    if frame is None:
+                        continue
                     logger.debug(f"Received {frame}")
                     if frame.command == KISSCommand.Data:
                         asyncio.create_task(self.inbound.put(
@@ -122,21 +129,39 @@ class KISSProtocol(asyncio.Protocol):
         asyncio.ensure_future(self.outbound.put(data))
 
     async def start(self):
-        while not self._stopped:
-            frame = await self.outbound.get()
-            if frame:
-                try:
-                    await asyncio.wait_for(self._loop_sync(frame), 5)
-                finally:
-                    self.outbound.task_done()
+        retry_iter = backoff(0.010, 1.2, 5.000)
+        while True:
+            if not self.closed:
+                frame = await self.outbound.get()
+                if frame:
+                    try:
+                        await self._loop_once(frame, 5.0)
+                    finally:
+                        self.outbound.task_done()
+            else:
+                await asyncio.sleep(next(retry_iter))
 
-    async def _loop_sync(self, frame: PortFrame):
+    async def _loop_once(self, frame: PortFrame, timeout: float):
         kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
         kiss_data = encode_kiss_frame(kiss_frame, False)
-        self.transport.write(kiss_data)
+        start = self.time()
+        while self.transport is None:
+            if self.time() - start > timeout:
+                break
+            await asyncio.sleep(0.010)
+
+        if self.transport:
+            self.transport.write(kiss_data)
+        else:
+            logger.warning("Timed out trying to write to KISS transport, discarding frame")
+
+    def time(self):
+        return time.time()
 
     def connection_lost(self, exc):
         logger.info(f"Closed connection on {self.transport}")
+        self.closed = True
+        self.transport = None
 
     def should_check_crc(self):
         return self.check_crc
@@ -223,19 +248,34 @@ def decode_kiss_frame(data, check_crc=False):
 
 async def kiss_port_factory(in_queue: asyncio.Queue, out_queue: asyncio.Queue, port_config: PortConfig):
     loop = asyncio.get_event_loop()
+    retry_backoff_iter = backoff(0.010, 1.2, 5.000)
+    transport, protocol = None, None
 
-    if port_config.port_type() == "serial":
-        protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, port_id=port_config.port_id(),
-                                   check_crc=port_config.get_boolean("kiss.checksum", False))
-        await serial_asyncio.create_serial_connection(
-            loop, protocol_factory, port_config.get("serial.device"), baudrate=port_config.get("serial.speed"))
-        logger.info(f"Created Serial Port {port_config.port_id()}")
-    elif port_config.port_type() == "tcp":
-        #  TODO TCP doesn't really work yet
-        protocol_factory = partial(KISSProtocol, loop, in_queue, out_queue, port_id=port_config.port_id(),
-                                   check_crc=port_config.get_boolean("kiss.checksum", False))
-        tcp_server = await loop.create_server(protocol_factory, "127.0.0.1", 8000)
-        await tcp_server.start_serving()
-        logger.info(f"Created TCP Port {port_config.port_id()}")
-    else:
-        logger.warning(f"Ignoring unknown port type {port_config.port_type()} for port {port_config.port_id()}")
+    def get_or_create_protocol():
+        if protocol is None:
+            return partial(KISSProtocol, loop, in_queue, out_queue, port_id=port_config.port_id(),
+                           check_crc=port_config.get_boolean("kiss.checksum", False))
+        else:
+            def reuse():
+                return protocol
+            return reuse
+
+    while True:
+        try:
+            if port_config.port_type() == "serial":
+                if protocol is None:
+                    logger.info(f"Opening serial port {port_config.port_id()}")
+                    transport, protocol = await serial_asyncio.create_serial_connection(
+                        loop, get_or_create_protocol(), port_config.get("serial.device"),
+                        baudrate=port_config.get("serial.speed"))
+                elif protocol.closed:
+                    logger.info(f"Reopening serial port {port_config.port_id()}")
+                    transport, protocol = await serial_asyncio.create_serial_connection(
+                        loop, get_or_create_protocol(), port_config.get("serial.device"),
+                        baudrate=port_config.get("serial.speed"))
+            else:
+                logger.warning(f"Unsupported port type {port_config.port_type()}")
+                return
+        except Exception as err:
+            logger.warning(f"Error {err} while connecting, trying again later")
+        await asyncio.sleep(next(retry_backoff_iter))

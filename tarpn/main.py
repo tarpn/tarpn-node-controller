@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import logging.config
 from logging.handlers import TimedRotatingFileHandler
 import sys
 from functools import partial
@@ -39,7 +40,8 @@ async def main_async():
     for port_config in s.port_configs():
         in_queue: asyncio.Queue = asyncio.Queue()
         out_queue: asyncio.Queue = asyncio.Queue()
-        await kiss_port_factory(in_queue, out_queue, port_config)
+        asyncio.create_task(kiss_port_factory(in_queue, out_queue, port_config))
+
         # Wire the port with an AX25 layer
         dlm = DataLinkManager(AX25Call.parse(node_settings.node_call()), port_config.port_id(),
                               in_queue, out_queue, loop.create_future)
@@ -87,32 +89,11 @@ async def main_async():
                                  start_serving=True)
 
     # Configure logging
-    packet_logger = logging.getLogger("packet")
-    packet_logger.setLevel(logging.INFO)
-    packet_logger.addHandler(handler)
+    logging.config.fileConfig("config/logging.ini", disable_existing_loggers=False)
 
     event_logger = logging.getLogger("events")
     event_logger.setLevel(logging.INFO)
     event_logger.addHandler(handler)
-
-    ax25_state_logger = logging.getLogger("ax25.state")
-    netrom_state_logger = logging.getLogger("netrom.state")
-
-    fh = TimedRotatingFileHandler('logs/state.log', when='midnight')
-    fh = logging.FileHandler('logs/state.log')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
-    ax25_state_logger.addHandler(fh)
-    netrom_state_logger.addHandler(fh)
-
-    if args.debug:
-        packet_logger.setLevel(logging.DEBUG)
-        event_logger.setLevel(logging.DEBUG)
-        handler.setLevel(logging.DEBUG)
-        ax25_state_logger.setLevel(logging.DEBUG)
-        netrom_state_logger.setLevel(logging.DEBUG)
-        ax25_state_logger.addHandler(handler)
-        netrom_state_logger.addHandler(handler)
 
     # Start processing packets
     tasks = [dlm.start() for dlm in dlms]

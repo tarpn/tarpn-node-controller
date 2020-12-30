@@ -124,7 +124,7 @@ class NetRomCircuit:
 
     def log_prefix(self):
         return f"NET/ROM [Circuit={self.circuit_id} RemoteCircuit={self.remote_circuit_id} Local={self.local_call} " \
-               f"Remote={self.remote_call} State={self.state}]"
+               f"Remote={self.remote_call} State={self.state} V(R)={self.recv_state()} V(S)={self.send_state()}]"
 
     @classmethod
     def create(cls, circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
@@ -551,7 +551,7 @@ def connected_handler(
 
         async def check_ack():
             # TODO need to implement timeout and retry
-            await asyncio.sleep(0.500)
+            await asyncio.sleep(10.000)
             if circuit.hw <= info.tx_seq_num:
                 # Retransmit
                 print(f"Retransmit {info}")
@@ -626,9 +626,9 @@ class NetRomStateMachine:
                 raise RuntimeError(f"No handler for state {handler}")
             logger = LoggingMixin(self._logger, circuit.log_prefix)
             try:
-                logger.debug(f"Handling {event}")
                 new_state = handler(circuit, event, self._netrom, logger)
                 circuit.state = new_state
+                logger.info(f"Handled {event}")
             except Exception as err:
                 logger.exception(f"Failed to handle {event}", err)
             finally:
