@@ -1,6 +1,7 @@
 import asyncio
+import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterator
 
 
 class Timer:
@@ -13,16 +14,13 @@ class Timer:
         self.delay = delay
         self._cb = cb
         self._started = 0
-        self._timer: Optional[asyncio.Task] = None
+        self._timer = None
 
     def __repr__(self):
         return f"Timer(delay={self.delay}, remaining={self.remaining()})"
 
     def start(self):
-        if self._timer:
-            self._timer.cancel()
-        self._started = time.time()
-        self._timer = asyncio.get_event_loop().call_later(self.delay / 1000., self._run_cb)
+        raise NotImplementedError
 
     def _run_cb(self):
         if self._timer:
@@ -47,6 +45,23 @@ class Timer:
             return self.delay - ((time.time() - self._started) * 1000.)
         else:
             return -1
+
+
+class AsyncioTimer(Timer):
+    def start(self):
+        if self._timer:
+            self._timer.cancel()
+        self._started = time.time()
+        self._timer = asyncio.get_event_loop().call_later(self.delay / 1000., self._run_cb)
+
+
+class ThreadingTimer(Timer):
+    def start(self):
+        if self._timer:
+            self._timer.cancel()
+        self._started = time.time()
+        self._timer = threading.Timer(self.delay / 1000., self._run_cb)
+        self._timer.start()
 
 
 def chunks(lst, n):
@@ -85,6 +100,23 @@ def backoff(start_time, growth_factor, max_time):
         next_time = min(max_time, next_time * growth_factor)
         yield next_time
 
+
+class BackoffGenerator(Iterator):
+    def __init__(self, initial_wait: float, growth_factor: float, max_wait: float):
+        self.initial_wait = initial_wait
+        self.growth_factor = growth_factor
+        self.max_wait = max_wait
+        self.next_wait = initial_wait
+
+    def __next__(self):
+        this_wait = self.next_wait
+        self.next_wait = min(self.max_wait, self.next_wait * self.growth_factor)
+        return this_wait
+
+    def reset(self):
+        self.next_wait = self.initial_wait
+
+
 async def shutdown(loop):
     # Give things a chance to shutdown
     await asyncio.sleep(1)
@@ -98,3 +130,22 @@ async def shutdown(loop):
 
 def graceful_shutdown():
     asyncio.create_task(shutdown(asyncio.get_running_loop()))
+
+
+class CountDownLatch(object):
+    def __init__(self, count=1):
+        self.count = count
+        self.lock = threading.Condition()
+
+    def countdown(self):
+        self.lock.acquire()
+        self.count -= 1
+        if self.count <= 0:
+            self.lock.notifyAll()
+        self.lock.release()
+
+    def join(self):
+        self.lock.acquire()
+        while self.count > 0:
+            self.lock.wait()
+        self.lock.release()

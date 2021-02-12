@@ -23,10 +23,10 @@ _default_settings = {
 
 _default_port_settings = {
     "port.enabled": True,
-    "l2.ack.delay": 30,
-    "l2.retry.count": 20,
-    "l2.retry.timeout": 4000,
-    "l2.idle.timeout": 180000
+    "datalink.ack.delay": 30,
+    "datalink.retry.count": 20,
+    "datalink.retry.timeout": 4000,
+    "datalink.idle.timeout": 180000
 }
 
 

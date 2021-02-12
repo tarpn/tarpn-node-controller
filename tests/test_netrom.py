@@ -1,8 +1,8 @@
 import unittest
 
 from tarpn.ax25 import AX25Call
-from tarpn.netrom import NetRomInfo, OpType
-from tarpn.netrom.network import RoutingTable, parse_netrom_nodes, encode_netrom_nodes
+from tarpn.netrom import NetRomInfo, OpType, parse_netrom_nodes, encode_netrom_nodes
+from tarpn.netrom.router import NetRomRoutingTable
 from tarpn.settings import NetworkConfig
 
 
@@ -24,7 +24,7 @@ class TestNetRom(unittest.TestCase):
         re_encoded = encode_netrom_nodes(nodes)
         assert re_encoded == nodes_payload
 
-        table = RoutingTable("DAVID")
+        table = NetRomRoutingTable("DAVID")
         table.update_routes(AX25Call("K4DBZ", 2), 0, nodes)
         print(table)
 

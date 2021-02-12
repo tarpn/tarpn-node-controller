@@ -5,14 +5,14 @@ from enum import IntEnum, unique
 import logging
 
 import asyncio
-
 import serial_asyncio
 
-from tarpn.port import PortFrame, logger
+from tarpn.datalink import FrameData
 from tarpn.settings import PortConfig
 from tarpn.util import backoff
 
 logger = logging.getLogger("kiss")
+
 
 @unique
 class KISSMagic(IntEnum):
@@ -77,7 +77,7 @@ class KISSProtocol(asyncio.Protocol):
         self._buffer = bytearray()
         self.closed = False
 
-    def connection_made(self, transport):
+    def connection_made(self, transport: serial_asyncio.SerialTransport):
         logger.info(f"Opened connection on {transport}")
         self.transport = transport
         self.closed = False
@@ -96,9 +96,7 @@ class KISSProtocol(asyncio.Protocol):
                         continue
                     logger.debug(f"Received {frame}")
                     if frame.command == KISSCommand.Data:
-                        asyncio.create_task(self.inbound.put(
-                            PortFrame(self.port_id, frame.data, frame.hdlc_port,
-                                      self._data_callback(frame.hdlc_port))))
+                        asyncio.create_task(self.inbound.put(FrameData(self.port_id, frame.data)))
                     elif frame.command == KISSCommand.SetHardware:
                         self.on_hardware(frame)
                     else:
@@ -135,19 +133,16 @@ class KISSProtocol(asyncio.Protocol):
                 frame = await self.outbound.get()
                 if frame:
                     try:
-                        await self._loop_once(frame, 5.0)
+                        await self._loop_once(frame)
                     finally:
                         self.outbound.task_done()
             else:
                 await asyncio.sleep(next(retry_iter))
 
-    async def _loop_once(self, frame: PortFrame, timeout: float):
-        kiss_frame = KISSFrame(frame.hldc_port, KISSCommand.Data, frame.data)
+    async def _loop_once(self, frame: FrameData):
+        kiss_frame = KISSFrame(0, KISSCommand.Data, frame.data)
         kiss_data = encode_kiss_frame(kiss_frame, False)
-        start = self.time()
         while self.transport is None:
-            if self.time() - start > timeout:
-                break
             await asyncio.sleep(0.010)
 
         if self.transport:
@@ -207,8 +202,9 @@ def encode_kiss_frame(frame: KISSFrame, include_crc=False):
     return out
 
 
-def decode_kiss_frame(data, check_crc=False):
-    """Given a KISS frame (excluding the frame delimiters), decode the port and command.
+def decode_kiss_frame(data, check_crc=False) -> KISSFrame:
+    """
+    Given a KISS frame (excluding the frame delimiters), decode the port and command.
     Also un-escape the data
     """
     crc = 0

@@ -8,13 +8,12 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
 import logging
-from typing import Callable, cast, Dict, Optional, List
-
+from typing import Callable, cast, Dict, Optional, List, Tuple
 
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
     L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25, AX25StateType
-from tarpn.logging import LoggingMixin
-from tarpn.util import Timer, between
+from tarpn.log import LoggingMixin
+from tarpn.util import AsyncioTimer, between, Timer
 
 
 class AX25EventType(Enum):
@@ -198,10 +197,11 @@ class AX25State:
     def create(cls,
                remote_call: AX25Call,
                local_call: AX25Call,
-               internal_event_cb: Callable[[AX25StateEvent], None]):
+               internal_event_cb: Callable[[AX25StateEvent], None],
+               timer_factory: Callable[[float, Callable[[], None]], Timer]):
         new_state = cls(str(remote_call), remote_call, local_call, internal_event_cb)
-        new_state.t1 = Timer(1_000, new_state.t1_timeout)  # TODO configure these
-        new_state.t3 = Timer(180_000, new_state.t3_timeout)
+        new_state.t1 = timer_factory(1_000, new_state.t1_timeout)  # TODO configure these
+        new_state.t3 = timer_factory(180_000, new_state.t3_timeout)
         return new_state
 
     def t1_timeout(self):
@@ -417,8 +417,9 @@ def disconnected_handler(
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
         internal_info = cast(InternalInfo, event.packet)
-        UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, True,
-                         internal_info.protocol, internal_info.info)
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
+                              internal_info.protocol, internal_info.info)
+        ax25.write_packet(ui)
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_DATA:
         event.future.set_exception(RuntimeError("Not connected"))
@@ -490,7 +491,8 @@ def awaiting_connection_handler(
     elif event.event_type == AX25EventType.IFRAME_READY:
         if not state.layer_3:
             (pending, future) = state.pending_frames.get()
-            asyncio.ensure_future(delay_outgoing_data(state, pending, future))
+            #asyncio.ensure_future(delay_outgoing_data(state, pending, future))
+            state.push_iframe(pending, future)
             state.pending_frames.task_done()
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_UI:
@@ -504,7 +506,7 @@ def awaiting_connection_handler(
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
         pending = cast(InternalInfo, event.packet)
         ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
-                              True, pending.protocol, pending.info)
+                              False, pending.protocol, pending.info)
         ax25.write_packet(ui)
         return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_DM:
@@ -590,7 +592,8 @@ def connected_handler(
         logger.debug(f"Pending iframe: {pending}")
         if state.window_exceeded():
             logger.debug(f"Window exceeded, delaying frame")
-            asyncio.create_task(delay_outgoing_data(state, pending, future))
+            #asyncio.create_task(delay_outgoing_data(state, pending, future))
+            state.push_iframe(pending, future)
         else:
             i_frame = IFrame.i_frame(
                 dest=state.remote_call,
@@ -606,7 +609,8 @@ def connected_handler(
             state.sent_frames[state.get_send_state()] = i_frame
             state.futures[state.get_send_state()] = future
             # Complete the future indicating the DL_DATA event was sent out
-            future.set_result(None)
+            if future:
+                future.set_result(None)
             state.inc_send_state()
             state.ack_pending = False
             if state.t1.running():
@@ -662,7 +666,8 @@ def connected_handler(
                                     info.protocol, info.info)
         ax25.write_packet(ui_frame)
         state.pending_frames.task_done()
-        future.set_result(None)  # No ack's needed for unit data
+        if future:
+            future.set_result(None)  # No ack's needed for unit data
         return AX25StateType.Connected
     elif event.event_type == AX25EventType.AX25_UI:
         ui_frame = cast(UIFrame, event.packet)
@@ -752,7 +757,8 @@ def timer_recovery_handler(
         pending, future = state.pending_frames.get()
         if state.window_exceeded():
             logger.debug("Window exceeded, delaying frame")
-            asyncio.ensure_future(delay_outgoing_data(state, pending, future))
+            #asyncio.ensure_future(delay_outgoing_data(state, pending, future))
+            state.push_iframe(pending, future)
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
                                      state.get_recv_state(), state.get_send_state(), pending.protocol, pending.info)
@@ -772,7 +778,7 @@ def timer_recovery_handler(
             transmit_enquiry(state, ax25)
             return AX25StateType.TimerRecovery
         else:
-            logger.debug("l2 retries exceeded, disconnecting")
+            logger.debug("datalink retries exceeded, disconnecting")
             if state.get_ack_state() == state.get_send_state():
                 ax25.dl_error(state.remote_call, state.local_call, "U")
             else:
@@ -952,7 +958,7 @@ def awaiting_release_handler(
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
         pending = cast(InternalInfo, event.packet)
         ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
-                              True, pending.protocol, pending.info)
+                              False, pending.protocol, pending.info)
         ax25.write_packet(ui)
         return AX25StateType.AwaitingRelease
     elif event.event_type in (AX25EventType.AX25_INFO, AX25EventType.AX25_RR, AX25EventType.AX25_RNR,
@@ -1032,8 +1038,8 @@ class DeferredAX25(AX25):
     def write_packet(self, packet: AX25Packet):
         self.calls.append(partial(self.actual_ax25.write_packet, packet))
 
-    def callsign(self):
-        return self.actual_ax25.callsign()
+    def local_call(self) -> AX25Call:
+        return self.actual_ax25.local_call()
 
     def apply(self):
         for deferred in self.calls:
@@ -1049,9 +1055,9 @@ class AX25StateMachine:
     Holds a mapping of AX.25 sessions keyed on remote callsign.
 
     """
-    def __init__(self, ax25: AX25):
+    def __init__(self, ax25: AX25, timer_factory: Callable[[float, Callable[[], None]], Timer]):
         self._ax25 = ax25
-        self._sessions: Dict[str, AX25State] = {}
+        self._sessions: Dict[Tuple[AX25Call, AX25Call], AX25State] = {}  # (remote, local)
         self._handlers = {
             AX25StateType.Disconnected: disconnected_handler,
             AX25StateType.Connected: connected_handler,
@@ -1059,6 +1065,7 @@ class AX25StateMachine:
             AX25StateType.TimerRecovery: timer_recovery_handler,
             AX25StateType.AwaitingRelease: awaiting_release_handler
         }
+        self._timer_factory = timer_factory
         self._logger = logging.getLogger("ax25.state")
 
     def log(self, state: AX25State, msg: str, *args, **kwargs):
@@ -1067,23 +1074,30 @@ class AX25StateMachine:
                           f"V(S)={state.get_send_state()} {msg}")
 
     def _get_or_create_session(self, remote_call: AX25Call, local_call: AX25Call) -> AX25State:
-        session_id = str(remote_call)
-        state = self._sessions.get(session_id)
+        state = self._sessions.get((remote_call, local_call))
         if state is None:
-            state = AX25State.create(remote_call, local_call, self.handle_internal_event)
-            self._sessions[session_id] = state
+            state = AX25State.create(remote_call, local_call, self.handle_internal_event, self._timer_factory)
+            self._sessions[(remote_call, local_call)] = state
         return state
 
     def get_sessions(self) -> Dict[AX25Call, AX25StateType]:
-        return {s.remote_call: s.current_state for k, s in self._sessions.items()}
+        return {s.remote_call: s.current_state for k, s in self._sessions.items() if k[1] == self._ax25.local_call()}
 
     def get_state(self, remote_call: AX25Call) -> AX25StateType:
-        session_id = str(remote_call)
-        state = self._sessions.get(session_id)
+        local_call = self._ax25.local_call()
+        state = self._sessions.get((remote_call, local_call))
         if state is None:
             return AX25StateType.Disconnected
         else:
             return state.current_state
+
+    def is_window_exceeded(self, remote_call: AX25Call) -> bool:
+        local_call = self._ax25.local_call()
+        state = self._sessions.get((remote_call, local_call))
+        if state is None:
+            return False
+        else:
+            return state.window_exceeded()
 
     def handle_packet(self, packet: AX25Packet):
         state = self._get_or_create_session(packet.source, packet.dest)
@@ -1098,12 +1112,13 @@ class AX25StateMachine:
         logger.debug(f"Handled {event}")
         deferred.apply()
 
-    def handle_internal_event(self, event: AX25StateEvent):
+    def handle_internal_event(self, event: AX25StateEvent) -> bool:
         if event.event_type in (AX25EventType.DL_CONNECT, AX25EventType.DL_UNIT_DATA):
             #  allow these events to create a new session
-            state = self._get_or_create_session(event.remote_call, self._ax25.callsign())
+            state = self._get_or_create_session(event.remote_call, self._ax25.local_call())
         else:
-            state = self._sessions.get(str(event.remote_call))
+            local_call = self._ax25.local_call()
+            state = self._sessions.get((event.remote_call, local_call))
         if not state:
             raise RuntimeError(f"No session for internal event {event}")
         handler = self._handlers[state.current_state]
@@ -1115,3 +1130,4 @@ class AX25StateMachine:
         state.current_state = new_state
         logger.debug(f"Handled {event}")
         deferred.apply()
+        return state.window_exceeded()

@@ -9,6 +9,10 @@ EXTRA_REQUIRES = dict(
         # Type checker
         'mypy==0.780',
 
+        # Profiling
+        'line_profiler==3.1.0',
+        'flameprof==0.4',
+
         # Testing
         'pytest==6.0.1',
         'pytest-runner==5.2'
@@ -29,6 +33,7 @@ setup(
                  'tarpn-kiss-cat = tarpn.tools.kiss_cat:main',
                  'tarpn-packet-dump = tarpn.tools.packet_dump:main',
                  'tarpn-node = tarpn.main:main',
+                 'tarpn-node2 = tarpn.main2:main',
                  'kiss-bench = tarpn.tools.kiss_bench:main',
                  'tarpn-tty = tarpn.tools.tty:main'
              ]},
@@ -40,6 +45,7 @@ setup(
         'pyserial==3.4',
         'pyserial-asyncio==0.4',
         'msgpack==1.0.0',
+        'pyformance==0.4'
     ],
     extras_require=EXTRA_REQUIRES
 )

@@ -34,6 +34,9 @@ class AX25Call:
     def __hash__(self):
         return repr(self).__hash__()
 
+    def __copy__(self):
+        return AX25Call(callsign=self.callsign, ssid=self.ssid)
+
     def clear_flags(self):
         self.rr = 0
         self.c_flag = False
@@ -55,12 +58,6 @@ class AX25Call:
         if len(parts) != 2:
             raise ValueError(f"Cannot parse callsign {s}. Expected callsign with ssid (e.g., C4LL-9)")
         return cls(parts[0], int(parts[1]))
-
-
-@dataclass
-class AX25Address:
-    port: int
-    call: AX25Call
 
 
 @dataclass
@@ -117,7 +114,8 @@ class SupervisoryCommand(IntEnum):
             source.c_flag = True
         else:
             # Legacy, don't use c bit
-            pass
+            dest.c_flag = False
+            source.c_flag = False
 
 
 @dataclass
@@ -434,7 +432,7 @@ class AX25:
         else:
             return f"Unknown code {code}"
 
-    def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code):
+    def dl_error(self, remote_call: AX25Call, local_call: AX25Call, error_code: str):
         raise NotImplemented
 
     def dl_data_request(self, remote_call: AX25Call, protocol: L3Protocol, data: bytes):
@@ -458,10 +456,7 @@ class AX25:
     def write_packet(self, packet: AX25Packet):
         raise NotImplemented
 
-    def link_state(self, remote_call: AX25Call) -> AX25StateType:
-        raise NotImplemented
-
-    def callsign(self):
+    def local_call(self) -> AX25Call:
         raise NotImplemented
 
 

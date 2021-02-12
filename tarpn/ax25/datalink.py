@@ -1,17 +1,16 @@
 import asyncio
 import logging
-import time
 from typing import List, cast, Callable
 
-from asyncio import AbstractEventLoop, Future
+from asyncio import Future
 
 from tarpn.ax25 import AX25Call, L3Protocol, decode_ax25_packet, AX25Packet, AX25, AX25StateType
 from tarpn.ax25 import UIFrame, L3Handler
-from tarpn.port import PortFrame
+from tarpn.datalink import FrameData
 from tarpn.ax25.statemachine import AX25StateMachine, AX25StateEvent
 from tarpn.events import EventBus
-from tarpn.logging import LoggingMixin
-
+from tarpn.log import LoggingMixin
+from tarpn.util import AsyncioTimer
 
 packet_logger = logging.getLogger("packet")
 
@@ -38,7 +37,7 @@ class DataLinkManager(AX25, LoggingMixin):
         self.link_port = link_port
         self.inbound = inbound      # PortFrame
         self.outbound = outbound    # PortFrame
-        self.state_machine = AX25StateMachine(self)
+        self.state_machine = AX25StateMachine(self, AsyncioTimer)
         self.l3_handlers: List[L3Handler] = []
         self.future_provider = future_provider
         self._stopped: bool = False
@@ -61,7 +60,7 @@ class DataLinkManager(AX25, LoggingMixin):
             self._loop_sync(frame)
             self.inbound.task_done()
 
-    def _loop_sync(self, frame: PortFrame):
+    def _loop_sync(self, frame: FrameData):
         try:
             packet = decode_ax25_packet(frame.data)
             if packet.dest == AX25Call("NODES"):
@@ -71,7 +70,7 @@ class DataLinkManager(AX25, LoggingMixin):
             packet_logger.info(f"RX: {packet}")
             EventBus.emit("packet", [packet])
         except Exception:
-            self.exception(f"Had an error parsing packet: {frame}")
+            self.error(f"Had an error parsing packet: {frame}")
             return
 
         try:
@@ -92,19 +91,7 @@ class DataLinkManager(AX25, LoggingMixin):
             else:
                 self.debug("Not continuing because this packet was handled by L3")
         except Exception:
-            self.exception(f"Had handling packet {packet}")
-
-    def _l3_writer_partial(self, remote_call: AX25Call, protocol: L3Protocol):
-        def inner(data: bytes):
-            self.state_machine.handle_internal_event(
-                AX25StateEvent.dl_data(remote_call, protocol, data))
-        return inner
-
-    def _writer_partial(self, remote_call: AX25Call):
-        def inner(data: bytes):
-            self.state_machine.handle_internal_event(
-                AX25StateEvent.dl_data(remote_call, L3Protocol.NoLayer3, data))
-        return inner
+            self.error(f"Had handling packet {packet}")
 
     def _closer_partial(self, remote_call: AX25Call, local_call: AX25Call):
         def inner():
@@ -185,13 +172,13 @@ class DataLinkManager(AX25, LoggingMixin):
         else:
             self.debug(f"TX: {packet}")
         packet_logger.info(f"TX: {packet}")
-        frame = PortFrame(self.link_port, packet.buffer, 0)
+        frame = FrameData(self.link_port, packet.buffer)
         asyncio.create_task(self.outbound.put(frame))
 
     def link_state(self, remote_call: AX25Call) -> AX25StateType:
         return self.state_machine.get_state(remote_call)
 
-    def callsign(self):
+    def local_call(self):
         return self.link_call
 
 

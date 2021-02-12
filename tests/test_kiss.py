@@ -4,7 +4,7 @@ from functools import partial
 from typing import cast
 
 import tests.utils
-from tarpn.port import PortFrame
+from tarpn.datalink import FrameData
 from tarpn.port.kiss import KISSProtocol
 
 
@@ -19,9 +19,9 @@ class TestKiss(unittest.IsolatedAsyncioTestCase):
         kiss_protocol = cast(KISSProtocol, protocol)
         test_transport = cast(tests.utils.TestTransport, transport)
 
-        kiss_protocol.loop_once(PortFrame(0, "Testing".encode("ascii")))
+        kiss_protocol.loop_once(FrameData(0, "Testing".encode("ascii")))
         data = test_transport.captured_writes()[0]
 
         test_transport.read(data)
         incoming = await in_queue.get()
-        assert incoming.data == b'Testing'
+        assert incoming.buffer == b'Testing'

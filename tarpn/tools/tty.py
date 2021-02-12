@@ -3,9 +3,7 @@ import asyncio
 import logging
 import signal
 import sys
-from asyncio import transports, Queue
-from functools import partial
-from typing import Optional
+from asyncio import Queue
 
 from tarpn.ax25 import AX25Call, L3Protocol
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
@@ -72,26 +70,27 @@ class L2TTY:
 
 
 class TTY:
-    def __init__(self, app_call: str, remote_call, nl: NetRom):
-        self.local_call = AX25Call.parse(app_call)
+    def __init__(self, my_call: str, my_alias: str, remote_call, nl: NetRom):
+        self.local_call = AX25Call.parse(my_call)
+        self.local_alias = AX25Call(callsign=my_alias)
         self.remote_call = AX25Call.parse(remote_call)
         self.nl = nl
         self.stdin_queue = Queue()
         self.connected = False
         self.circuit_id = None
         EventBus.bind(EventListener(
-            f"netrom.{app_call}.connect",
-            f"netrom_{app_call}_connect",
+            f"netrom.{my_call}.connect",
+            f"netrom_{my_call}_connect",
             self.handle_connect
         ))
         EventBus.bind(EventListener(
-            f"netrom.{app_call}.disconnect",
-            f"netrom_{app_call}_disconnect",
+            f"netrom.{my_call}.disconnect",
+            f"netrom_{my_call}_disconnect",
             self.handle_disconnect
         ))
         EventBus.bind(EventListener(
-            f"netrom.{app_call}.inbound",
-            f"netrom_{app_call}_inbound",
+            f"netrom.{my_call}.inbound",
+            f"netrom_{my_call}_inbound",
             self.handle_data
         ))
 
@@ -102,7 +101,7 @@ class TTY:
             if next_stdin is not None:
                 if not self.connected:
                     print("connecting...")
-                    self.nl.nl_connect_request(self.remote_call, self.local_call)
+                    self.nl.nl_connect_request(self.remote_call, self.local_call, self.local_call, self.local_alias)
                 else:
                     await self.nl.nl_data_request(self.circuit_id, self.remote_call, self.local_call, next_stdin.encode("utf-8"))
                 self.stdin_queue.task_done()
@@ -110,6 +109,7 @@ class TTY:
     def handle_connect(self, circuit_id: int, remote_call: AX25Call):
         print(f"Connected to {remote_call} on circuit {circuit_id}")
         sys.stdout.write("> ")
+        sys.stdout.flush()
         self.connected = True
         self.circuit_id = circuit_id
 
@@ -120,12 +120,19 @@ class TTY:
         graceful_shutdown()
 
     def handle_stdin(self):
-        line = sys.stdin.readline().strip()
-        asyncio.create_task(self.stdin_queue.put(line))
+        line = sys.stdin.readline()
+        if line == "":  # Got a ^D
+            if self.connected:
+                self.nl.nl_disconnect_request(self.circuit_id, self.remote_call, self.local_call)
+        else:
+            line = line.strip()
+            asyncio.create_task(self.stdin_queue.put(line))
 
     def handle_data(self, circuit_id: int, remote_call: AX25Call, data: bytes):
         msg = str(data, 'utf-8')
         sys.stdout.write(msg)
+        sys.stdout.write("> ")
+        sys.stdout.flush()
 
 
 def handle_signal(dlm, tty, loop):
@@ -140,7 +147,7 @@ def main():
     parser.add_argument("local_call", help="Your callsign (e.g., K4DBZ-10)")
     parser.add_argument("local_alias", help="Your alias (e.g., ZDBZ10)")
     parser.add_argument("remote_call", help="Remote callsign")
-    parser.add_argument("-l2", help="Force L2 mode", action="store_true")
+    parser.add_argument("-datalink", help="Force L2 mode", action="store_true")
     parser.add_argument("--check-crc", type=bool, default=False)
     parser.add_argument("--monitor-port", type=int)
     parser.add_argument("--debug", action="store_true")
@@ -158,28 +165,26 @@ def main():
 
     in_queue: asyncio.Queue = asyncio.Queue()
     out_queue: asyncio.Queue = asyncio.Queue()
-    loop.run_until_complete(kiss_port_factory(in_queue, out_queue, port_config))
+    loop.create_task(kiss_port_factory(in_queue, out_queue, port_config))
 
     # Wire the port with an AX25 layer
     dlm = DataLinkManager(AX25Call.parse(args.local_call), port_config.port_id(), in_queue, out_queue, loop.create_future)
     dlm.add_l3_handler(IdHandler())
 
     # Wire up the network
-    if not args.l2:
-        network_config = NetworkConfig.from_dict({
-            "netrom.node.call": args.local_call,
-            "netrom.node.alias": args.local_alias,
-            "netrom.ttl": 7,
-            "netrom.nodes.interval": 60,
-            "netrom.obs.init": 6,
-            "netrom.obs.min": 4,
-            "netrom.nodes.quality.min": 74
-        })
-        nl = NetworkManager(network_config, loop)
-        nl.attach_data_link(dlm)
-        tty = TTY(args.local_call, args.remote_call, nl)
-    else:
-        tty = L2TTY(args.local_call, args.remote_call, dlm)
+
+    network_config = NetworkConfig.from_dict({
+        "netrom.node.call": args.local_call,
+        "netrom.node.alias": args.local_alias,
+        "netrom.ttl": 7,
+        "netrom.nodes.interval": 60,
+        "netrom.obs.init": 6,
+        "netrom.obs.min": 4,
+        "netrom.nodes.quality.min": 74
+    })
+    nl = NetworkManager(network_config, loop)
+    nl.attach_data_link(dlm)
+    tty = TTY(args.local_call, args.local_alias, args.remote_call, nl)
 
     loop.create_task(tty.start())
     loop.add_reader(sys.stdin, tty.handle_stdin)
@@ -206,10 +211,7 @@ def main():
     loop.add_signal_handler(signal.SIGTERM, handle_signal, dlm, tty, loop)
     loop.add_signal_handler(signal.SIGINT, handle_signal, dlm, tty, loop)
     loop.create_task(dlm.start())
-    if args.l2:
-        loop.call_later(3.000, partial(dlm.dl_connect_request, AX25Call.parse(args.remote_call)))
-    else:
-        loop.create_task(nl.start())
+    loop.create_task(nl.start())
 
     try:
         loop.run_forever()

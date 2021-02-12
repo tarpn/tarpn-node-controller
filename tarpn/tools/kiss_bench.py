@@ -3,7 +3,7 @@ import asyncio
 import os
 import time
 
-from tarpn.port import PortFrame
+from tarpn.datalink import FrameData
 from tarpn.port.kiss import kiss_port_factory
 from tarpn.settings import PortConfig
 
@@ -12,7 +12,7 @@ async def produce(count, size, queue):
     out = []
     for i in range(count):
         data = os.urandom(32)
-        dl_frame = PortFrame(1, data, 0)
+        dl_frame = FrameData(1, data, 0)
         out.append(dl_frame)
         await asyncio.create_task(queue.put(dl_frame))
     print("Done sending")
@@ -84,7 +84,7 @@ async def async_main():
 
     corrupt = 0
     for a, b in zip(sent, received):
-        if a.data != b.data:
+        if a.data != b.buffer:
             corrupt += 1
 
     print(f"Corrupt packets: {corrupt}")

@@ -13,7 +13,7 @@ async def printer(inbound):
     while True:
         frame = await inbound.get()
         if frame is not None:
-            packet = decode_ax25_packet(frame.data)
+            packet = decode_ax25_packet(frame.buffer)
             print(packet)
             inbound.task_done()
 

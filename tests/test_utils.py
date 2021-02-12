@@ -3,7 +3,7 @@ import unittest
 
 import asyncio
 
-from tarpn.util import Timer
+from tarpn.util import AsyncioTimer
 from tests.utils import MockTime
 
 
@@ -14,7 +14,7 @@ class UtilsTest(unittest.IsolatedAsyncioTestCase):
 
         event = asyncio.Event()
 
-        timer = Timer(3000, functools.partial(event.set))
+        timer = AsyncioTimer(3000, functools.partial(event.set))
         timer.start()
 
         time.sleep(4)

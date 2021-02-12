@@ -2,12 +2,14 @@ import argparse
 import asyncio
 import logging
 import logging.config
+from asyncio import Protocol, transports, BaseTransport, Transport
 from logging.handlers import TimedRotatingFileHandler
 import sys
 from functools import partial
+from typing import Optional
 
-from tarpn.app import NetromAppProtocol
-from tarpn.app.sysop import NodeApplication, DataLinkAdapter, NetworkAdapter
+from tarpn.app import NetromAppProtocol, TransportMultiplexer, MultiplexingProtocol
+from tarpn.app.sysop import CommandProcessorProtocol, DataLinkAdapter
 from tarpn.ax25 import AX25Call
 from tarpn.ax25.datalink import DataLinkManager, IdHandler
 from tarpn.events import EventBus, EventListener
@@ -21,6 +23,26 @@ handler.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message
 logger = logging.getLogger("main")
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
+
+
+class EchoProtocol(Protocol):
+    def __init__(self):
+        self.transport: Optional[Transport] = None
+
+    def data_received(self, data: bytes) -> None:
+        logger.info(f"Data received: {data}")
+        if self.transport:
+            self.transport.write(data)
+
+    def connection_made(self, transport: Transport) -> None:
+        peer = transport.get_extra_info("peername")
+        logger.info(f"Connection made to {peer}")
+        self.transport = transport
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        peer = self.transport.get_extra_info("peername")
+        logger.info(f"Connection lost to {peer}")
+        self.transport = None
 
 
 async def main_async():
@@ -55,32 +77,29 @@ async def main_async():
 
     # Bind apps to netrom and start running the app servers
     for app_config in s.app_configs():
-        nl.bind(AX25Call.parse(app_config.app_call()), app_config.app_alias())
-        factory = partial(NetromAppProtocol, app_config.app_name(), AX25Call.parse(app_config.app_call()), app_config.app_alias(), nl)
-        await loop.create_unix_server(factory, app_config.app_socket(), start_serving=True)
+        # This multiplexer bridges the unix socket server and the network connections
+        multiplexer = TransportMultiplexer()
 
-    node_app_factory = partial(NodeApplication, s, dlms, nl)
+        # We have a single unix socket connection
+        unix_factory = partial(NetromAppProtocol, app_config.app_name(), AX25Call.parse(app_config.app_call()),
+                               app_config.app_alias(), nl, multiplexer)
+        logger.info(f"Creating unix socket server for {app_config.app_call()} at {app_config.app_socket()}")
+        await loop.create_unix_server(unix_factory, app_config.app_socket(), start_serving=True)
+
+        # And many network connections
+        network_factory = partial(MultiplexingProtocol, multiplexer)
+        nl.bind_server(AX25Call.parse(app_config.app_call()), app_config.app_alias(), network_factory)
+
+    node_app_factory = partial(CommandProcessorProtocol, s, dlms, nl)
     for dlm in dlms:
+        # TODO add a bind_server thing here too?
         dlm.add_l3_handler(DataLinkAdapter(dlm, node_app_factory))
 
-    # Make a default application for L4
     node_call = s.network_configs().node_call()
-    adaptor = NetworkAdapter(node_call, nl, node_app_factory)
-    EventBus.bind(EventListener(
-        f"netrom.{node_call}.inbound",
-        f"netrom_{node_call}_inbound",
-        adaptor.on_data
-    ))
-    EventBus.bind(EventListener(
-        f"netrom.{node_call}.connect",
-        f"netrom_{node_call}_connect",
-        adaptor.on_connect
-    ))
-    EventBus.bind(EventListener(
-        f"netrom.{node_call}.disconnect",
-        f"netrom_{node_call}_disconnect",
-        adaptor.on_disconnect
-    ))
+    node_alias = s.network_configs().node_alias()
+
+    # Make a default application for L4
+    nl.bind_server(AX25Call.parse(node_call), node_alias, node_app_factory)
 
     if node_settings.admin_enabled():
         await loop.create_server(protocol_factory=node_app_factory,

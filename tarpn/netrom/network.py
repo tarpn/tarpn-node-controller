@@ -1,276 +1,41 @@
 import asyncio
-import datetime
-import json
 import logging
-import os
-from asyncio import Lock, AbstractEventLoop
-from dataclasses import dataclass, field
-from itertools import islice
-from operator import attrgetter
-from typing import Dict, List, cast, Iterator
+from asyncio import Lock, AbstractEventLoop, Transport, Protocol
+from typing import Dict, List, cast, Any, Callable, Tuple
 
-from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, parse_ax25_call, SupervisoryCommand, AX25StateType
+from tarpn.ax25 import AX25Call, L3Protocol, AX25Packet, UIFrame, AX25StateType
 from tarpn.ax25.datalink import DataLinkManager, L3Handler
 from tarpn.events import EventBus, EventListener
-from tarpn.logging import LoggingMixin
-from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet
+from tarpn.log import LoggingMixin
+from tarpn.netrom import NetRom, NetRomPacket, parse_netrom_packet, parse_netrom_nodes, NetRomNodes
+from tarpn.netrom.router import NetRomRoutingTable
 from tarpn.netrom.statemachine import NetRomStateMachine, NetRomStateEvent, NetRomStateType
 from tarpn.settings import NetworkConfig
-from tarpn.util import chunks
-
+from tarpn.util import AsyncioTimer
 
 packet_logger = logging.getLogger("packet")
-
-
-@dataclass
-class Neighbor:
-    call: AX25Call
-    port: int
-    quality: int
-
-
-@dataclass
-class Route:
-    neighbor: AX25Call
-    dest: AX25Call
-    next_hop: AX25Call
-    quality: int
-    obsolescence: int
-
-
-@dataclass
-class Destination:
-    node_call: AX25Call
-    node_alias: str
-    neighbor_map: Dict[AX25Call, Route] = field(default_factory=dict)
-    freeze: bool = False
-
-    def sorted_neighbors(self):
-        return sorted(self.neighbor_map.values(), key=attrgetter("quality"), reverse=True)
-
-
-@dataclass
-class NodeDestination:
-    dest_node: AX25Call
-    dest_alias: str
-    best_neighbor: AX25Call
-    quality: int
-
-    def __post_init__(self):
-        self.quality = int(self.quality)
-
-
-@dataclass
-class NetRomNodes:
-    sending_alias: str
-    destinations: List[NodeDestination]
-
-    def to_packets(self, source: AX25Call) -> Iterator[UIFrame]:
-        for dest_chunk in chunks(self.destinations, 11):
-            nodes_chunk = NetRomNodes(self.sending_alias, dest_chunk)
-            yield UIFrame.ui_frame(AX25Call("NODES", 0), source, [], SupervisoryCommand.Command,
-                                   False, L3Protocol.NetRom, encode_netrom_nodes(nodes_chunk))
-
-    def save(self, source: AX25Call, file: str):
-        nodes_json = {
-            "nodeCall": str(source),
-            "nodeAlias": self.sending_alias,
-            "createdAt": datetime.datetime.now().isoformat(),
-            "destinations": [{
-                "nodeCall": str(d.dest_node),
-                "nodeAlias": d.dest_alias,
-                "bestNeighbor": str(d.best_neighbor),
-                "quality": d.quality
-            } for d in self.destinations]
-        }
-        with open(file, "w") as fp:
-            json.dump(nodes_json, fp, indent=2)
-
-    @classmethod
-    def load(cls, source: AX25Call, file: str):
-        if not os.path.exists(file):
-            return
-        with open(file) as fp:
-            nodes_json = json.load(fp)
-            assert str(source) == nodes_json["nodeCall"]
-            sending_alias = nodes_json["nodeAlias"]
-            destinations = []
-            for dest_json in nodes_json["destinations"]:
-                destinations.append(NodeDestination(
-                    AX25Call.parse(dest_json["nodeCall"]),
-                    dest_json["nodeAlias"],
-                    AX25Call.parse(dest_json["bestNeighbor"]),
-                    int(dest_json["quality"])
-                ))
-            return cls(sending_alias, destinations)
-
-
-@dataclass
-class RoutingTable:
-    node_alias: str
-    our_calls: List[AX25Call] = field(default_factory=list)
-
-    # Neighbors is a map of direct neighbors we have, i.e., who we have heard NODES from
-    neighbors: Dict[AX25Call, Neighbor] = field(default_factory=dict)
-
-    # Destinations is the content of the NODES table, what routes exist to other nodes through which neighbors
-    destinations: Dict[AX25Call, Destination] = field(default_factory=dict)
-
-    # TODO config all these
-    default_obs: int = 100
-    default_quality: int = 255
-    min_quality: int = 50
-    min_obs: int = 4
-
-    def __repr__(self):
-        s = "Neighbors:\n"
-        for neighbor in self.neighbors.values():
-            s += f"\t{neighbor}\n"
-        s += "Destinations:\n"
-        for dest in self.destinations.values():
-            s += f"\t{dest}\n"
-        return s.strip()
-
-    def route(self, packet: NetRomPacket) -> List[AX25Call]:
-        """
-        If a packet's destination is a known neighbor, route to it. Otherwise look up the route with the highest
-        quality and send the packet to the neighbor which provided that route
-        :param packet:
-        :return: list of neighbor callsign's in sorted order of route quality
-        """
-        if packet.dest in self.neighbors:
-            return [packet.dest]
-        else:
-            dest = self.destinations.get(packet.dest)
-            if dest:
-                return [n.neighbor for n in dest.sorted_neighbors()]
-            else:
-                return []
-
-    def bind_application(self, app_call: AX25Call, app_alias: str):
-        app_routes = {}
-        for our_call in self.our_calls:
-            app_routes[our_call] = Route(our_call, app_call, our_call, 95, 100)
-        self.destinations[app_call] = Destination(app_call, app_alias, app_routes, True)
-
-    def update_routes(self, heard_from: AX25Call, heard_on_port: int, nodes: NetRomNodes):
-        """
-        Update the routing table with a NODES broadcast.
-
-        This method is not thread-safe.
-        """
-        # Get or create the neighbor and destination
-        neighbor = self.neighbors.get(heard_from, Neighbor(heard_from, heard_on_port, self.default_quality))
-        self.neighbors[heard_from] = neighbor
-
-        # Add direct route to whoever sent the NODES
-        dest = self.destinations.get(heard_from, Destination(heard_from, nodes.sending_alias))
-        dest.neighbor_map[heard_from] = Route(heard_from, heard_from, heard_from,
-                                              self.default_quality, self.default_obs)
-        self.destinations[heard_from] = dest
-
-        for destination in nodes.destinations:
-            # Filter out ourselves
-            route_quality = 0
-            if destination.best_neighbor in self.our_calls:
-                # Best neighbor is us, this is a "trivial loop", quality is zero
-                continue
-            else:
-                # Otherwise compute this route's quality based on the NET/ROM spec
-                route_quality = (destination.quality * neighbor.quality + 128.) / 256.
-
-            # Only add routes which are above the minimum quality to begin with TODO check this logic
-            if route_quality > self.min_quality:
-                new_dest = self.destinations.get(
-                    destination.dest_node, Destination(destination.dest_node, destination.dest_alias))
-                new_route = new_dest.neighbor_map.get(
-                    neighbor.call, Route(neighbor.call, destination.dest_node, destination.best_neighbor,
-                                         int(route_quality), self.default_obs))
-                new_route.quality = route_quality
-                new_route.obsolescence = self.default_obs
-                new_dest.neighbor_map[neighbor.call] = new_route
-                self.destinations[destination.dest_node] = new_dest
-            else:
-                # print(f"Saw new route for {destination}, but quality was too low")
-                pass
-
-    def prune_routes(self) -> None:
-        """
-        Prune any routes which we haven't heard about in a while.
-
-        This method is not thread-safe.
-        """
-        # print("Pruning routes")
-        for call, destination in list(self.destinations.items()):
-            if destination.freeze:
-                # Don't prune frozen routes
-                continue
-            for neighbor, route in list(destination.neighbor_map.items()):
-                route.obsolescence -= 1
-                if route.obsolescence <= 0:
-                    # print(f"Removing {neighbor} from {destination} neighbor's list")
-                    del destination.neighbor_map[neighbor]
-            if len(destination.neighbor_map.keys()) == 0:
-                # print(f"No more routes to {call}, removing from routing table")
-                del self.destinations[call]
-                if call in self.neighbors:
-                    del self.neighbors[call]
-
-    def get_nodes(self) -> NetRomNodes:
-        node_destinations = []
-        for destination in self.destinations.values():
-            best_neighbor = None
-            for neighbor in destination.sorted_neighbors():
-                if neighbor.obsolescence >= self.min_obs:
-                    best_neighbor = neighbor
-                    break
-                else:
-                    # print(f"Not including {neighbor} in NODES, obsolescence below threshold")
-                    pass
-            if best_neighbor:
-                node_destinations.append(NodeDestination(destination.node_call, destination.node_alias,
-                                                         best_neighbor.next_hop, best_neighbor.quality))
-            else:
-                #  print(f"No good neighbor was found for {destination}")
-                pass
-        return NetRomNodes(self.node_alias, node_destinations)
-
-
-def parse_netrom_nodes(data: bytes) -> NetRomNodes:
-    bytes_iter = iter(data)
-    assert next(bytes_iter) == 0xff
-    sending_alias = bytes(islice(bytes_iter, 6)).decode("ASCII", "replace").strip()
-    destinations = []
-    while True:
-        try:
-            dest = parse_ax25_call(bytes_iter)
-            alias = bytes(islice(bytes_iter, 6)).decode("ASCII", "replace").strip()
-            neighbor = parse_ax25_call(bytes_iter)
-            quality = next(bytes_iter)
-            destinations.append(NodeDestination(dest, alias, neighbor, quality))
-        except StopIteration:
-            break
-    return NetRomNodes(sending_alias, destinations)
-
-
-def encode_netrom_nodes(nodes: NetRomNodes) -> bytes:
-    b = bytearray()
-    b.append(0xff)
-    b.extend(nodes.sending_alias.ljust(6, " ").encode("ASCII"))
-    for dest in nodes.destinations:
-        dest.dest_node.write(b)
-        b.extend(dest.dest_alias.ljust(6, " ").encode("ASCII"))
-        dest.best_neighbor.write(b)
-        b.append(dest.quality & 0xff)
-    return bytes(b)
 
 
 class NetworkManager(NetRom, L3Handler, LoggingMixin):
     def __init__(self, config: NetworkConfig, loop: AbstractEventLoop):
         self.config = config
-        self.sm = NetRomStateMachine(self)
-        self.router = RoutingTable(config.node_alias())
+        self.sm = NetRomStateMachine(self, AsyncioTimer)
+        self.router = NetRomRoutingTable(config.node_alias())
         self.l3_apps: Dict[AX25Call, str] = {}
+
+        # Mapping of destination addresses to protocol factory. When a new connection is made to the destination
+        # we will create a new instance of the protocol as well as a NetRom transport and add it to l3_connections
+        self.l3_servers: Dict[AX25Call, Callable[[], Protocol]] = {}
+
+        # This is a mapping of local circuit IDs to (transport, protocol). When incoming data is handled for a
+        # circuit, this is how we pass it on to the instance of the protocol
+        self.l3_connections: Dict[int, Tuple[Transport, Protocol]] = {}
+
+        # This is a mapping of local circuit ID to a protocol factory. These protocols do not yet have a transport and
+        # are in a half-opened state. Once a connect ack is received, a transport will be created and these will be
+        # migrated to l3_connections
+        self.l3_half_open: Dict[int, Callable[[], Protocol]] = {}
+
         self.data_links: Dict[int, DataLinkManager] = {}
         self.route_lock = Lock()
         self.loop = loop
@@ -329,6 +94,9 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         elif netrom_packet.dest in self.l3_apps:
             # Destination is an app served by this node
             self.sm.handle_packet(netrom_packet)
+        elif netrom_packet.dest in self.l3_servers:
+            # Destination is an app served by this node
+            self.sm.handle_packet(netrom_packet)
         else:
             # Destination is somewhere else
             self.write_packet(netrom_packet, forward=True)
@@ -349,13 +117,18 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
                            remote_call: AX25Call, local_call: AX25Call, data: bytes):
         # Called from the state machine to indicate data to higher layers
         EventBus.emit(f"netrom.{local_call}.inbound", my_circuit_idx, remote_call, data)
+        if my_circuit_idx in self.l3_connections:
+            self.l3_connections[my_circuit_idx][1].data_received(data)
+        else:
+            self.warning(f"Data indication for unknown circuit {my_circuit_idx}")
 
-    def nl_connect_request(self, remote_call: AX25Call, local_call: AX25Call):
+    def nl_connect_request(self, remote_call: AX25Call, local_call: AX25Call,
+                           origin_node: AX25Call, origin_user: AX25Call):
         if remote_call == local_call:
             raise RuntimeError(f"Cannot connect to node's own callsign {local_call}")
 
         # circuit_id of -1 means pick an unused circuit to use
-        nl_connect = NetRomStateEvent.nl_connect(-1, remote_call, local_call)
+        nl_connect = NetRomStateEvent.nl_connect(-1, remote_call, local_call, origin_node, origin_user)
         self.sm.handle_internal_event(nl_connect)
 
         async def poll():
@@ -367,9 +140,32 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         return asyncio.create_task(poll())
 
     def nl_connect_indication(self, my_circuit_idx: int, my_circuit_id: int,
-                              remote_call: AX25Call, local_call: AX25Call):
+                              remote_call: AX25Call, local_call: AX25Call,
+                              origin_node: AX25Call, origin_user: AX25Call):
         # Send a connect event
         EventBus.emit(f"netrom.{local_call}.connect", my_circuit_idx, remote_call)
+
+        if my_circuit_idx in self.l3_half_open:
+            # Complete a half-opened connection
+            protocol_factory = self.l3_half_open[my_circuit_idx]
+            protocol = protocol_factory()
+            transport = NetworkTransport(self, local_call, remote_call, my_circuit_idx, origin_node, origin_user)
+            protocol.connection_made(transport)
+            self.l3_connections[my_circuit_idx] = (transport, protocol)
+            del self.l3_half_open[my_circuit_idx]
+        elif local_call in self.l3_servers:
+            if my_circuit_idx in self.l3_connections:
+                # An existing connection, re-connect it
+                self.l3_connections[my_circuit_idx][1].connection_lost(RuntimeError("Remote end reconnected"))
+                self.l3_connections[my_circuit_idx][1].connection_made(self.l3_connections[my_circuit_idx][0])
+            else:
+                # This a new connection, create the transport and protocol
+                transport = NetworkTransport(self, local_call, remote_call, my_circuit_idx, origin_node, origin_user)
+                protocol = self.l3_servers[local_call]()
+                protocol.connection_made(transport)
+                self.l3_connections[my_circuit_idx] = (transport, protocol)
+        else:
+            self.warning(f"Got unexpected connection from {remote_call} at {local_call}:{my_circuit_idx}")
 
     def nl_disconnect_request(self, my_circuit_id: int, remote_call: AX25Call, local_call: AX25Call):
         nl_disconnect = NetRomStateEvent.nl_disconnect(my_circuit_id, remote_call, local_call)
@@ -387,6 +183,13 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
                                  remote_call: AX25Call, local_call: AX25Call):
         EventBus.emit(f"netrom.{local_call}.disconnect", my_circuit_idx, remote_call)
 
+        if local_call in self.l3_servers:
+            if my_circuit_idx in self.l3_connections:
+                self.l3_connections[my_circuit_idx][1].connection_lost(None)
+                del self.l3_connections[my_circuit_idx]
+            else:
+                self.warning(f"Disconnect indication received for unknown circuit {my_circuit_idx}")
+
     # TODO error indication
 
     def write_packet(self, packet: NetRomPacket, forward: bool = False) -> bool:
@@ -394,6 +197,9 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         routed = False
         for route in possible_routes:
             neighbor = self.router.neighbors.get(route)
+            if neighbor is None:
+                self.logger.warning(f"No neighbor for route {route}")
+                continue
             #print(f"Trying route {route} to neighbor {neighbor}")
             data_link = self.data_links.get(neighbor.port)
 
@@ -421,7 +227,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         data_link.add_l3_handler(self)
 
     def bind(self, l4_call: AX25Call, l4_alias: str):
-        self.router.bind_application(l4_call, l4_alias)
+        self.router.listen_for_address(l4_call, l4_alias)
         self.l3_apps[l4_call] = l4_alias
 
         # Need to bind this here so the application can start sending packets right away
@@ -430,6 +236,25 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
             f"netrom_{l4_call}_outbound",
             lambda remote_call, data: self.nl_data_request(remote_call, l4_call, data)
         ), True)
+
+    def bind_server(self, l3_call: AX25Call, l3_alias: str, protocol_factory: Callable[[], Protocol]):
+        """
+        Bind a protocol factory to a NetRom destination address
+        :param l3_call:             The callsign for the destination
+        :param l3_alias:            An alias for this destination (used in NODES broadcast)
+        :param protocol_factory:    The protocol factory
+        :return:
+        """
+        self.router.listen_for_address(l3_call, l3_alias)
+        self.l3_servers[l3_call] = protocol_factory
+
+    def open(self, protocol_factory: Callable[[], Protocol], local_call: AX25Call, remote_call: AX25Call,
+             origin_node: AX25Call, origin_user: AX25Call):
+        # This a new connection, create the transport and protocol
+        nl_connect = NetRomStateEvent.nl_connect(-1, remote_call, local_call, origin_node, origin_user)
+        self.sm.handle_internal_event(nl_connect)
+        self.l3_half_open[nl_connect.circuit_id] = protocol_factory
+
 
     async def _maybe_open_data_link(self, port: int, remote_call: AX25Call):
         data_link = self.data_links.get(port)
@@ -462,3 +287,21 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
                 self.router.prune_routes()
             await self._broadcast_nodes()
             await asyncio.sleep(self.config.nodes_interval())
+
+
+class NetworkTransport(Transport):
+    def __init__(self, network: NetRom, local_call: AX25Call, remote_call: AX25Call, circuit_id: int,
+                 origin_node: AX25Call, origin_user: AX25Call):
+        Transport.__init__(self, extra={"peername": (str(remote_call), circuit_id)})
+        self.network = network
+        self.remote_call = remote_call
+        self.local_call = local_call
+        self.circuit_id = circuit_id
+        self.origin_node = origin_node
+        self.origin_user = origin_user
+
+    def write(self, data: Any) -> None:
+        self.network.nl_data_request(self.circuit_id, self.remote_call, self.local_call, data)
+
+    def close(self) -> None:
+        self.network.nl_disconnect_request(self.circuit_id, self.remote_call, self.local_call)
