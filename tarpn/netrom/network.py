@@ -196,7 +196,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
         possible_routes = self.router.route(packet)
         routed = False
         for route in possible_routes:
-            neighbor = self.router.neighbors.get(route)
+            neighbor = self.router.neighbors.get(str(route))
             if neighbor is None:
                 self.logger.warning(f"No neighbor for route {route}")
                 continue
@@ -223,7 +223,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
     def attach_data_link(self, data_link: DataLinkManager):
         self.data_links[data_link.link_port] = data_link
-        self.router.our_calls.append(data_link.link_call)
+        self.router.our_calls.add(data_link.link_call)
         data_link.add_l3_handler(self)
 
     def bind(self, l4_call: AX25Call, l4_alias: str):
@@ -275,7 +275,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
     async def _broadcast_nodes(self):
         nodes = self.router.get_nodes()
-        nodes.save(AX25Call.parse(self.config.node_call()), "nodes.json")
+        nodes.save("nodes.json")
         for dl in self.data_links.values():
             for nodes_packet in nodes.to_packets(AX25Call.parse(self.config.node_call())):
                 dl.write_packet(nodes_packet)

@@ -171,11 +171,7 @@ class NetRomTransportProtocol(NetRom, L4Protocol, LoggingMixin):
         dest = NetRomAddress(packet.dest.callsign, packet.dest.ssid, "DEST")
         payload = L3Payload(source, dest, 0xCF, packet.buffer, -1, QoS.Default, True)
         if self.l3_protocol is not None:
-            if not self.l3_protocol.send_packet(payload):
-                self.debug(f"No route to {dest}, dropping")
-                return False
-            else:
-                return True
+            return self.l3_protocol.send_packet(payload)
         else:
             self.warning("Cannot send, L3 not attached")
             return False

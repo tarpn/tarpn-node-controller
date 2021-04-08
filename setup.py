@@ -19,8 +19,8 @@ EXTRA_REQUIRES = dict(
     ]
 )
 setup(
-    name='tarpn',
-    version='',
+    name='tarpn-core',
+    version='0.1.0',
     packages=find_packages(),
     url='',
     license='',
@@ -35,17 +35,20 @@ setup(
                  'tarpn-node = tarpn.main:main',
                  'tarpn-node2 = tarpn.main2:main',
                  'kiss-bench = tarpn.tools.kiss_bench:main',
-                 'tarpn-tty = tarpn.tools.tty:main'
+                 'tarpn-tty = tarpn.tools.tty:main',
+                 'tarpn-tty2 = tarpn.tools.tty2:main',
+                 'tarpn-app = tarpn.app.runner:main'
              ]},
     python_requires='>=3.7',
     install_requires=[
-        'appdirs==1.4.4',
+        # 'appdirs==1.4.4',
         'asyncio==3.4.3',
         'hexdump==3.3',
         'pyserial==3.4',
         'pyserial-asyncio==0.4',
         'msgpack==1.0.0',
-        'pyformance==0.4'
+        'pyformance==0.4',
+        'Flask==1.1.2'
     ],
     extras_require=EXTRA_REQUIRES
 )

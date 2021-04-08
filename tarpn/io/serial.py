@@ -1,3 +1,4 @@
+import logging
 import threading
 from abc import ABC
 from collections import deque
@@ -30,7 +31,9 @@ class SerialLoop(CloseableThreadLoop, ABC):
 class SerialReadLoop(SerialLoop, LoggingMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        LoggingMixin.__init__(self, extra_func=partial(str, f"[Serial Reader {self.ser.name}]"))
+        LoggingMixin.__init__(self,
+                              logger=logging.getLogger("serial"),
+                              extra_func=partial(str, f"[Serial Reader {self.ser.name}]"))
 
     def iter_loop(self):
         if self.open_event.wait():
@@ -47,7 +50,9 @@ class SerialReadLoop(SerialLoop, LoggingMixin):
 class SerialWriteLoop(SerialLoop, LoggingMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        LoggingMixin.__init__(self, extra_func=partial(str, f"[Serial Writer {self.ser.name}]"))
+        LoggingMixin.__init__(self,
+                              logger=logging.getLogger("serial"),
+                              extra_func=partial(str, f"[Serial Writer {self.ser.name}]"))
         self.unsent = deque(maxlen=20)
         self.retry_backoff = BackoffGenerator(0.100, 1.2, 1.000)
 

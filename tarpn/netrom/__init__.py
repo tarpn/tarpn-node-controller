@@ -281,13 +281,12 @@ class NetRomNodes:
                                    False, L3Protocol.NetRom, encode_netrom_nodes(nodes_chunk))
 
     def to_chunks(self) -> Iterator[bytes]:
-        for dest_chunk in chunks(self.destinations, 11):
+        for dest_chunk in chunks(self.destinations, 5):
             nodes_chunk = NetRomNodes(self.sending_alias, dest_chunk)
             yield encode_netrom_nodes(nodes_chunk)
 
-    def save(self, source: AX25Call, file: str):
+    def save(self, file: str):
         nodes_json = {
-            "nodeCall": str(source),
             "nodeAlias": self.sending_alias,
             "createdAt": datetime.datetime.now().isoformat(),
             "destinations": [{
@@ -301,12 +300,11 @@ class NetRomNodes:
             json.dump(nodes_json, fp, indent=2)
 
     @classmethod
-    def load(cls, source: AX25Call, file: str):
+    def load(cls, file: str):
         if not os.path.exists(file):
-            return
+            return None, 0
         with open(file) as fp:
             nodes_json = json.load(fp)
-            assert str(source) == nodes_json["nodeCall"]
             sending_alias = nodes_json["nodeAlias"]
             destinations = []
             for dest_json in nodes_json["destinations"]:
@@ -316,7 +314,7 @@ class NetRomNodes:
                     AX25Call.parse(dest_json["bestNeighbor"]),
                     int(dest_json["quality"])
                 ))
-            return cls(sending_alias, destinations)
+            return cls(sending_alias, destinations), datetime.datetime.fromisoformat(nodes_json["createdAt"])
 
 
 def parse_netrom_nodes(data: bytes) -> NetRomNodes:

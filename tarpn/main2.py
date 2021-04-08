@@ -1,5 +1,6 @@
 import argparse
 import logging
+import logging.config
 from functools import partial
 
 from pyformance.reporters import ConsoleReporter
@@ -21,7 +22,7 @@ from tarpn.settings import Settings
 from tarpn.transport.netrom_l4 import NetRomTransportProtocol
 from tarpn.transport.unix import UnixServerThread
 
-logger = logging.getLogger("main")
+logger = logging.getLogger("root")
 
 
 def main():
@@ -45,6 +46,9 @@ def run_node(args):
     s = Settings(".", args.config)
     node_settings = s.node_config()
 
+    # Setup logging
+    logging.config.fileConfig("config/logging.ini", disable_existing_loggers=False)
+
     # Create thread pool
     scheduler = Scheduler()
 
@@ -62,8 +66,10 @@ def run_node(args):
         scheduler.submit(L2IOLoop(l2_queueing, l2))
 
     # Register L3 protocols
+    routing_table = tarpn.netrom.router.NetRomRoutingTable.load(f"nodes-{s.network_configs().node_call()}.json",
+                                                                s.network_configs().node_alias())
     netrom_l3 = NetRomL3(AX25Call.parse(s.network_configs().node_call()), s.network_configs().node_alias(),
-                         scheduler, l2_multi, tarpn.netrom.router.NetRomRoutingTable(s.network_configs().node_alias()))
+                         scheduler, l2_multi, routing_table)
     l3_protocols.register(netrom_l3)
     l3_protocols.register(NoLayer3Protocol())
 
@@ -86,14 +92,8 @@ def run_node(args):
         multiplexer_protocol = partial(MultiplexingProtocol, app_multiplexer)
         netrom_l4.bind_server(AX25Call.parse(app_config.app_call()), app_config.app_alias(), multiplexer_protocol)
 
-    # Configure logging
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
-        logging.basicConfig(level=logging.INFO)
-
     # Start a metrics reporter
-    reporter = ConsoleReporter()
+    reporter = ConsoleReporter(reporting_interval=300)
     reporter.start()
     scheduler.add_shutdown_hook(reporter.stop)
 

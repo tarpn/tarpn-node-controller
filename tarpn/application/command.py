@@ -8,6 +8,7 @@ from typing import Optional, cast
 from tarpn.ax25 import AX25Call
 from tarpn.datalink.protocol import LinkMultiplexer
 from tarpn.log import LoggingMixin
+from tarpn.netrom.router import NetRomRoutingTable
 from tarpn.network.netrom_l3 import NetRomL3
 from tarpn.scheduler import Scheduler
 from tarpn.settings import NetworkConfig
@@ -39,6 +40,7 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
         sub_parsers.add_parser("whoami", description="Print the current user")
         sub_parsers.add_parser("hostname", description="Print the current host")
         sub_parsers.add_parser("routes", description="Print the current routing table")
+        sub_parsers.add_parser("nodes", description="Print the nodes in the routing table")
 
         port_parser = sub_parsers.add_parser("ports", description="List available ports")
         port_parser.add_argument("--verbose", "-v", action="store_true")
@@ -137,9 +139,21 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
                 else:
                     resp += f" - L4 Link {circuit}: {nt.local_call}>{nt.remote_call}\n"
             self.println(resp, True)
+        elif parsed_args.command == "nodes":
+            routing_table = cast(NetRomRoutingTable, self.l3.router)
+            resp = "Nodes:\n"
+            for i, dest in enumerate(routing_table.destinations.values()):
+                resp += f"{dest.node_alias}:{dest.node_call}\t"
+                if i % 4 == 3:
+                    resp += "\n"
+            self.println(resp, True)
         elif parsed_args.command == "routes":
-            self.println("Routing Table:\n")
-            self.println(str(self.l3.router), True)
+            routing_table = cast(NetRomRoutingTable, self.l3.router)
+            resp = "Routes:\n"
+            for dest in routing_table.destinations.values():
+                for route in dest.neighbor_map.values():
+                    resp += f"{dest.node_alias}:{dest.node_call} via {route.next_hop}, qal={route.quality} obs={route.obsolescence}\n"
+            self.println(resp, True)
         elif parsed_args.command == "whoami":
             if isinstance(self.transport, NetRomTransport):
                 nt = cast(NetRomTransport, self.transport)

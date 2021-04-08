@@ -137,13 +137,18 @@ NetRomInfo(dest=K4DBZ-10, origin=K4DBZ-9, ttl=7, circuit_idx=1, circuit_id=1, tx
 
 200812 21:12:10 |          Connecting to Chat Node ZORB09
 200812 21:12:10 >          c KN4ORB-9
+
 200812 21:12:11 <          DAVID:K4DBZ-2} Connected to ZORB09:KN4ORB-9
+
 200812 21:12:11 >          *RTL
 200812 21:12:11 >          ^AKK4DBZ-9 KN4ORB-9 6.0.14.12
+
 200812 21:12:12 <          [BPQChatServer-6.0.14.12]
 200812 21:12:13 <          OK
+
 200812 21:12:13 >          ^AJK4DBZ-9 K4DBZ David Granville County near Grissom
 200812 21:12:13 >          ^ATK4DBZ-9 K4DBZ General
+
 200812 21:12:13 <          ^ANKN4ORB-9 KO4BIC-9 ZBIC09 6.0.14.12
 200812 21:12:13 <          ^ANKN4ORB-9 K4CBW-9 ZCBW09 6.0.14.12
 200812 21:12:13 <          ^ANKN4ORB-9 KC2BXN-9 ZBXN09 6.0.14.12
@@ -156,7 +161,9 @@ NetRomInfo(dest=K4DBZ-10, origin=K4DBZ-9, ttl=7, circuit_idx=1, circuit_id=1, tx
 200812 21:12:14 <          ^ANKN4ORB-9 N3LTV-9 ZLTV09 6.0.14.12
 200812 21:12:14 <          ^ANKN4ORB-9 W4EIP-9 ZEIP09 6.0.14.12
 200812 21:12:14 <          ^ANKN4ORB-9 W4GIA-9 ZGIA09 6.0.14.12
+
 200812 21:14:17 >          ^AKK4DBZ-9 KN4ORB-9 6.0.14.12
+
 200812 21:14:20 <          ^ANKN4ORB-9 AG4DB-9 Z4DB09 6.0.14.12
 200812 21:14:20 <          ^ANKN4ORB-9 K4RGN-9 ZRGN09 6.0.14.12
 200812 21:14:20 <          ^ANKN4ORB-9 N8ZU-9 Z8ZU09 6.0.14.12
@@ -191,3 +198,15 @@ NetRomInfo(dest=K4DBZ-10, origin=K4DBZ-9, ttl=7, circuit_idx=1, circuit_id=1, tx
 200812 21:29:54 <          <01>SKC2BXN-9 KC2BXN NC4FG $TH:IDL08-12-2020 11:46
 200812 21:29:59 <          <01>QK4RGN-9 K4KDE-9 ZKDE09
 200812 21:29:59 <          <01>QK4RGN-9 K4KDE-10 ZKDE10
+
+
+
+
+
+# L2 window size problem
+
+L3 sends payloads to L3 outbound queue
+
+L2 polls from this queue continuously
+
+If the L2 window size is exceeded, what to do?

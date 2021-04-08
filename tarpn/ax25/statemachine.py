@@ -55,7 +55,10 @@ class AX25StateEvent:
     future: Future = None
 
     def __repr__(self):
-        return f"{self.event_type}"
+        if self.packet is not None:
+            return f"{self.event_type} {self.packet}"
+        else:
+            return f"{self.event_type}"
 
     @classmethod
     def t1_expire(cls, remote_call: AX25Call):
@@ -199,7 +202,12 @@ class AX25State:
                local_call: AX25Call,
                internal_event_cb: Callable[[AX25StateEvent], None],
                timer_factory: Callable[[float, Callable[[], None]], Timer]):
-        new_state = cls(str(remote_call), remote_call, local_call, internal_event_cb)
+
+        def async_callback(event: AX25StateEvent) -> None:
+            cb = timer_factory(0, partial(internal_event_cb, event))
+            cb.start()
+
+        new_state = cls(str(remote_call), remote_call, local_call, async_callback)
         new_state.t1 = timer_factory(1_000, new_state.t1_timeout)  # TODO configure these
         new_state.t3 = timer_factory(180_000, new_state.t3_timeout)
         return new_state

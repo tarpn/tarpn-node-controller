@@ -21,9 +21,9 @@ class AX25StateType(Enum):
 class AX25Call:
     callsign: str = field(default="NOCALL")
     ssid: int = field(default=0)
-    rr: int = field(default=0, compare=False)
-    c_flag: bool = field(default=False, compare=False)
-    last: bool = field(default=False, compare=False)
+    rr: int = field(default=0, compare=False, hash=False)
+    c_flag: bool = field(default=False, compare=False, hash=False)
+    last: bool = field(default=False, compare=False, hash=False)
 
     def __post_init__(self):
         self.callsign = self.callsign.upper()
@@ -32,7 +32,7 @@ class AX25Call:
         return f"{self.callsign}-{self.ssid}"
 
     def __hash__(self):
-        return repr(self).__hash__()
+        return hash((self.callsign, self.ssid))
 
     def __copy__(self):
         return AX25Call(callsign=self.callsign, ssid=self.ssid)

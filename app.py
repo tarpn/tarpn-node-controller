@@ -3,14 +3,12 @@ import logging
 import sys
 import time
 
+from tarpn.app.runner import NetworkApp
+
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
-class MyApp:
-    def __init__(self, context, environ, *args, **kwargs):
-        self.context = context
-        print(environ)
-
+class MyApp(NetworkApp):
     def on_connect(self, address):
         print(f"MyApp got connection from {address}")
         self.context.write(address, f"Welcome, {address}!".encode("ASCII"))

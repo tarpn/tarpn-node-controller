@@ -4,6 +4,7 @@ from time import sleep
 from typing import Callable, Dict, Optional
 
 from tarpn.datalink import FrameData, L2Queuing, L2Address
+from tarpn.log import LoggingMixin
 from tarpn.network import L3Payload, L3Queueing
 from tarpn.scheduler import Scheduler, CloseableThreadLoop
 from tarpn.util import BackoffGenerator
@@ -113,9 +114,10 @@ class LinkMultiplexer:
             del self.logical_links[link_id]
 
 
-class L2L3Driver(CloseableThreadLoop):
+class L2L3Driver(CloseableThreadLoop, LoggingMixin):
     def __init__(self, queue: L3Queueing, l2: L2Protocol):
-        super().__init__(name=f"L3-to-L2 for Port={l2.get_device_id()}")
+        CloseableThreadLoop.__init__(self, name=f"L3-to-L2 for Port={l2.get_device_id()}")
+        LoggingMixin.__init__(self)
         self.queue = queue
         self.l2 = l2
         self.retry_backoff = BackoffGenerator(0.500, 1.5, 3.000)
@@ -123,9 +125,12 @@ class L2L3Driver(CloseableThreadLoop):
     def iter_loop(self):
         payload = self.queue.maybe_take()
         if payload is not None:
-            # print(f"Got L3 payload {payload}, sending to {self.l2}")
-            while not self.l2.send_packet(payload):
+            sent = self.l2.send_packet(payload)
+            while not sent and self.retry_backoff.total() < 20.000:
                 sleep(next(self.retry_backoff))
+                self.debug(f"Retrying send_packet {payload} to {self.l2}")
+            if not sent:
+                self.warning(f"Failed send_packet {payload} to {self.l2}")
             self.retry_backoff.reset()
 
 

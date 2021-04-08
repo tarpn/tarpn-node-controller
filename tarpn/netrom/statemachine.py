@@ -221,21 +221,17 @@ def disconnected_handler(
         # If we're disconnected, we don't have the remote circuit's ID/IDX, so we can't really do
         # much here besides try to re-connect
         logger.debug(f"Got unexpected packet {event.packet}. Attempting to reconnect")
-        conn = NetRomConnectRequest(
+        disc = NetRomPacket(
             circuit.remote_call,
             circuit.local_call,
             7,  # TODO configure TTL
-            circuit.circuit_idx,
-            circuit.circuit_id,
-            0,  # Send no circuit idx
-            0,  # Send no circuit id
-            OpType.ConnectRequest.as_op_byte(False, False, False),
-            2,  # Proposed window size (TODO get this from config)
-            circuit.origin_user,  # Origin user
-            circuit.origin_node,  # Origin node
-        )
-        if netrom.write_packet(conn):
-            return NetRomStateType.AwaitingConnection
+            circuit.remote_circuit_idx,
+            circuit.remote_circuit_id,
+            0,
+            0,
+            OpType.DisconnectRequest.as_op_byte(False, False, False))
+        if netrom.write_packet(disc):
+            return NetRomStateType.AwaitingRelease
         else:
             return NetRomStateType.Disconnected
     elif event.event_type == NetRomEventType.NETROM_DISCONNECT_ACK:
@@ -512,7 +508,7 @@ def connected_handler(
             logger.warning("Got Info Choke")
             # TODO stop sending until further notice
             pass
-        if event.packet.nak():
+        if ack.nak():
             seq_resend = event.packet.rx_seq_num
             logger.warning(f"Got Info NAK, rewinding to {seq_resend}")
             while seq_resend < circuit.send_state():

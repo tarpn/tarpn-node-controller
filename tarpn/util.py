@@ -1,7 +1,10 @@
 import asyncio
+import datetime
+import json
+import math
 import threading
 import time
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Dict
 
 
 class Timer:
@@ -107,14 +110,20 @@ class BackoffGenerator(Iterator):
         self.growth_factor = growth_factor
         self.max_wait = max_wait
         self.next_wait = initial_wait
+        self._total_waited = 0.0
 
     def __next__(self):
         this_wait = self.next_wait
         self.next_wait = min(self.max_wait, self.next_wait * self.growth_factor)
+        self._total_waited += this_wait
         return this_wait
+
+    def total(self):
+        return self._total_waited
 
     def reset(self):
         self.next_wait = self.initial_wait
+        self._total_waited = 0.0
 
 
 async def shutdown(loop):
@@ -149,3 +158,26 @@ class CountDownLatch(object):
         while self.count > 0:
             self.lock.wait()
         self.lock.release()
+
+
+def json_datetime_default(obj):
+    if isinstance(obj, datetime.datetime):
+        return {"$datetime": obj.isoformat()}
+    raise TypeError ("Type %s not serializable" % type(obj))
+
+
+def json_datetime_object_hook(obj):
+    dt = obj.get('$datetime')
+    if dt is not None:
+        return datetime.datetime.fromisoformat(dt)
+    return obj
+
+
+def json_dump(filename: str, o: Dict):
+    with open(filename, 'w') as fp:
+        json.dump(o, fp, indent=2, sort_keys=True, default=json_datetime_default)
+
+
+def json_load(filename) -> Dict:
+    with open(filename, 'r') as fp:
+        return json.load(fp, object_hook=json_datetime_object_hook)

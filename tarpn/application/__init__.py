@@ -52,20 +52,23 @@ class MultiplexingProtocol(Protocol):
         """
         print(f"Creating transport for {transport.remote_call}")
         self.network_transport = transport
-        self.multiplexer.network_transports[transport.remote_call] = transport
-
-        payload = AppPayload(0, 2, bytearray())
-        transport.remote_call.write(payload.buffer)
-        msg = msgpack.packb(dataclasses.asdict(payload))
-        self.multiplexer.socket_transport.write(msg)
+        if transport.remote_call not in self.multiplexer.network_transports:
+            self.multiplexer.network_transports[transport.remote_call] = transport
+            # This is a new connection, inform the application
+            payload = AppPayload(0, 2, bytearray())
+            transport.remote_call.write(payload.buffer)
+            msg = msgpack.packb(dataclasses.asdict(payload))
+            self.multiplexer.socket_transport.write(msg)
+        else:
+            self.multiplexer.network_transports[transport.remote_call] = transport
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
         payload = AppPayload(0, 3, bytearray())
-        self.network_transport.local_call.write(payload.buffer)
+        self.network_transport.remote_call.write(payload.buffer)
         msg = msgpack.packb(dataclasses.asdict(payload))
         self.multiplexer.socket_transport.write(msg)
 
-        del self.multiplexer.network_transports[self.network_transport.local_call]
+        del self.multiplexer.network_transports[self.network_transport.remote_call]
         self.network_transport = None
 
 
@@ -120,9 +123,15 @@ class ApplicationProtocol(Protocol, LoggingMixin):
                 raise RuntimeError(f"Unknown message type {payload.type}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
-        self.info(f"Lost connection to unix socket {self.multiplexer.socket_transport.get_extra_info('sockname')}")
+        self.info(f"Lost connection to unix socket")
         self.multiplexer.socket_transport = None
 
     def connection_made(self, transport: Transport):
         self.info(f"Connected to unix socket {transport.get_extra_info('sockname')}")
         self.multiplexer.socket_transport = transport
+        # Need to inform the application of all existing connections
+        for remote_call in self.multiplexer.network_transports.keys():
+            payload = AppPayload(0, 2, bytearray())
+            remote_call.write(payload.buffer)
+            msg = msgpack.packb(dataclasses.asdict(payload))
+            transport.write(msg)

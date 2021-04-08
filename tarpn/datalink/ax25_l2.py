@@ -13,6 +13,9 @@ from tarpn.scheduler import Scheduler
 from tarpn.util import chunks
 
 
+packet_logger = logging.getLogger("packet")
+
+
 @dataclass
 class AX25Address(L2Address):
     callsign: str = field()
@@ -81,13 +84,13 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
             ax25_packet = decode_ax25_packet(frame.data)
             self.maybe_create_logical_link(ax25_packet.source)
             if ax25_packet.dest == AX25Call("NODES"):
-                self.debug(f"RX: {ax25_packet}")
+                packet_logger.info(f"RX: {ax25_packet}")
                 # Eagerly connect to neighbors sending NODES
                 if self.state_machine.get_state(ax25_packet.source) in (AX25StateType.Disconnected,
                                                                         AX25StateType.AwaitingRelease):
                     self.dl_connect_request(copy(ax25_packet.source))
             else:
-                self.debug(f"RX: {ax25_packet}")
+                packet_logger.debug(f"RX: {ax25_packet}")
         except Exception:
             self.exception(f"Had error parsing packet: {frame}")
             return
@@ -103,10 +106,11 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def send_packet(self, payload: L3Payload) -> bool:
         remote_call = self.links_by_id.get(payload.link_id)
         if remote_call is None:
-            self.warning(f"No logical link has been established with id {payload.link_id}, dropping.")
+            self.warning(f"No logical link has been established with id {payload.link_id}, dropping {payload}.")
             return True
 
         if self.state_machine.is_window_exceeded(remote_call):
+            self.warning(f"Window exceeded on link {payload.link_id}, dropping {payload}.")
             return False
 
         if len(payload.buffer) > self.maximum_transmission_unit():
@@ -120,7 +124,7 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
             try:
                 self.state_machine.handle_internal_event(event)
             except RuntimeError:
-                self.exception(f"Error processing state event {event} for {remote_call}, dropping.")
+                self.exception(f"Error processing state event {event} for {remote_call}, dropping {payload}.")
             finally:
                 return True
 
@@ -154,7 +158,10 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
 
     def write_packet(self, packet: AX25Packet):
         frame = FrameData(self.link_port, packet.buffer)
-        self.debug(f"TX: {packet}")
+        if packet.dest == AX25Call("NODES"):
+            packet_logger.debug(f"TX: {packet}")
+        else:
+            packet_logger.info(f"TX: {packet}")
         if not self.queue.offer_outbound(frame):
             self.warning("Could not send frame, buffer full")
 

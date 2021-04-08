@@ -4,7 +4,6 @@ import asyncio
 import logging
 import signal
 import sys
-from functools import partial
 from typing import Optional
 
 from tarpn.ax25 import AX25Call
@@ -50,7 +49,7 @@ class TTY(Protocol):
                 signal.raise_signal(signal.SIGTERM)
             else:
                 line = line.strip()
-                self.transport.write(line)
+                self.transport.write(line + "\r")
         else:
             sys.stdout.write("Not connected\n")
             sys.stdout.flush()
