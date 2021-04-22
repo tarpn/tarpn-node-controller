@@ -33,5 +33,5 @@ class TestNetRom(unittest.TestCase):
         print(routes)
         print(table.get_nodes())
 
-        nodes.save(AX25Call("K4DBZ", 2), "nodes.json")
+        #nodes.save(AX25Call("K4DBZ", 2), "nodes.json")
 

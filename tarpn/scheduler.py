@@ -1,6 +1,7 @@
 import logging
 import threading
 from abc import ABC
+from concurrent.futures import Future
 from concurrent.futures.thread import ThreadPoolExecutor
 from typing import List, Callable, Any
 
@@ -37,6 +38,7 @@ class Scheduler(LoggingMixin):
         self.executor = ThreadPoolExecutor()
         self.threads: List[CloseableThread] = list()
         self.shutdown_tasks: List[Callable[..., Any]] = list()
+        self._futures: List[Future] = list()
         super().__init__(logging.getLogger("main"))
 
     def timer(self, delay: float, cb: Callable[[], None], auto_start=False) -> Timer:
@@ -51,7 +53,7 @@ class Scheduler(LoggingMixin):
         self.threads.append(thread)
 
     def run(self, runnable: Callable[..., Any]):
-        self.executor.submit(runnable)
+        self._futures.append(self.executor.submit(runnable))
 
     def add_shutdown_hook(self, runnable: Callable[..., Any]):
         self.shutdown_tasks.append(runnable)
@@ -59,7 +61,7 @@ class Scheduler(LoggingMixin):
     def join(self):
         for thread in self.threads:
             thread.join()
-        self.executor.shutdown(wait=True, cancel_futures=False)
+        self.executor.shutdown(wait=True)
 
     def shutdown(self):
         self.info("Shutting down")
@@ -78,7 +80,12 @@ class Scheduler(LoggingMixin):
                 self.exception(f"Failed to close {thread.name} during shutdown")
 
         # Forcibly shutdown remaining tasks
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        self.executor.shutdown(wait=False)
+
+        # Cancel any pending futures
+        for future in self._futures:
+            if not future.running() and not future.done():
+                future.cancel()
 
         # Run shutdown hooks
         for task in self.shutdown_tasks:

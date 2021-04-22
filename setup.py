@@ -1,5 +1,13 @@
+import os
 from setuptools import setup, find_packages
 
+here = os.path.abspath(os.path.dirname(__file__))
+
+def read_file_contents(path):
+    import codecs
+
+    with codecs.open(path, encoding="utf-8") as f:
+        return f.read()
 
 EXTRA_REQUIRES = dict(
     develop=[
@@ -19,14 +27,18 @@ EXTRA_REQUIRES = dict(
     ]
 )
 setup(
-    name='tarpn-core',
-    version='0.1.0',
-    packages=find_packages(),
-    url='',
-    license='',
-    author='David Arthur',
-    author_email='mumrah@gmail.com',
-    description='',
+    name = 'tarpn-core',
+    version = '0.1.0',
+    packages = find_packages(),
+    url = 'https://github.com/tarpn/tarpn-node-controller',
+    license = 'MIT License',
+    author = 'David Arthur',
+    author_email = 'mumrah@gmail.com',
+   
+    description = 'Python networking stack for packet radio',
+    long_description = read_file_contents(os.path.join(here, "README.md")),
+    long_description_content_type = "text/markdown",
+   
     entry_points={
              'console_scripts': [
                  'tarpn-serial-dump = tarpn.tools.serial_dump:main',
@@ -41,8 +53,6 @@ setup(
              ]},
     python_requires='>=3.7',
     install_requires=[
-        # 'appdirs==1.4.4',
-        'asyncio==3.4.3',
         'hexdump==3.3',
         'pyserial==3.4',
         'pyserial-asyncio==0.4',

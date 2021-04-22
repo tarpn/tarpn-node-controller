@@ -1,5 +1,5 @@
 import asyncio
-from asyncio import transports
+from asyncio import transports, AbstractEventLoop
 from functools import partial
 from typing import Any, Optional, Dict
 
@@ -55,13 +55,15 @@ class UnixServerThread(CloseableThread, LoggingMixin):
         self.path = path
         self.protocol = protocol
         self.server: Optional[Server] = None
+        self._loop: Optional[AbstractEventLoop] = None
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(self._create_server(self.path, self.protocol))
+        self._loop = asyncio.new_event_loop()
+        self._loop.run_until_complete(self._create_server(self.path, self.protocol))
+        self._loop.close()
 
     def close(self):
-        if self.server is not None:
+        if self.server is not None and self.server.is_serving():
             self.debug(f"Closing Unix socket server at {self.path}")
             self.server.close()
 

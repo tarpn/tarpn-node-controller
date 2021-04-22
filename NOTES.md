@@ -210,3 +210,14 @@ L3 sends payloads to L3 outbound queue
 L2 polls from this queue continuously
 
 If the L2 window size is exceeded, what to do?
+
+
+
+# Offline install
+python setup.py bdist_wheel --universal
+pip download . --dest dist --no-binary=:all:
+
+python3 -m venv venv
+source venv/bin/activate
+pip install wheel
+pip install tarpn-core --no-index --find-links .
