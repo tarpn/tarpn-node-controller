@@ -8,6 +8,7 @@ init:
 .PHONY: deps
 deps:
 	. venv/bin/activate; pip install -e .[develop]
+	rm -r venv/lib/python3.7/site-packages/tests
 
 .PHONY: dist
 dist:
