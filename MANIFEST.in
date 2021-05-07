@@ -1,1 +1,2 @@
 recursive-include config *.ini
+include app.py

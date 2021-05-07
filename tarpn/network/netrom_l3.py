@@ -6,7 +6,7 @@ from typing import cast, Optional, Tuple
 
 from tarpn.ax25 import AX25Call
 from tarpn.datalink import L2Payload
-from tarpn.datalink.ax25_l2 import AX25Address, LinkMultiplexer, AX25Protocol
+from tarpn.datalink.ax25_l2 import AX25Address, DefaultLinkMultiplexer, AX25Protocol
 from tarpn.datalink.protocol import L2Protocol
 from tarpn.log import LoggingMixin
 from tarpn.metrics import MetricsMixin
@@ -19,7 +19,7 @@ from tarpn.netrom import parse_netrom_packet, parse_netrom_nodes, NetRomNodes
 packet_logger = logging.getLogger("packet")
 
 
-@dataclass
+@dataclass(eq=True, frozen=True)
 class NetRomAddress(L3Address):
     callsign: str = field(compare=True)
     ssid: int = field(compare=True)
@@ -38,7 +38,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                  node_call: AX25Call,
                  node_alias: str,
                  scheduler: Scheduler,
-                 link_multiplexer: LinkMultiplexer,
+                 link_multiplexer: DefaultLinkMultiplexer,
                  routing_table):
         LoggingMixin.__init__(self)
         self.node_call = node_call
@@ -166,7 +166,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
         if isinstance(l2, AX25Protocol):
             # Special NET/ROM + AX.25 behavior
             for chunk in nodes.to_chunks():
-                link_id = l2.maybe_create_logical_link(AX25Call("NODES"))
+                link_id = l2.maybe_open_link(AX25Address("NODES"))
                 payload = L3Payload(L3Address(), L3Address(), 0xCF, chunk, link_id, QoS.Lowest, reliable=False)
                 packet_logger.debug(f"TX: {payload}")
                 self.link_multiplexer.get_queue(link_id).offer(payload)

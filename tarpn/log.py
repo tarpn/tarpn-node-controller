@@ -5,7 +5,7 @@ from functools import partial
 class LoggingMixin:
     def __init__(self, logger: logging.Logger = None, extra_func=None):
         if logger is None:
-            self.logger = logging.getLogger("main")
+            self.logger = logging.getLogger("root")
         else:
             self.logger = logger
         if extra_func is None:

@@ -1,5 +1,4 @@
 import dataclasses
-from asyncio import transports, Transport
 from asyncio.protocols import Protocol
 from dataclasses import dataclass
 from typing import Optional, Dict
@@ -9,7 +8,6 @@ import asyncio
 import msgpack
 
 from tarpn.ax25 import AX25Call, parse_ax25_call
-from tarpn.events import EventBus, EventListener
 from tarpn.netrom import NetRom
 from tarpn.netrom.network import NetworkTransport
 
@@ -18,7 +16,8 @@ from tarpn.netrom.network import NetworkTransport
 class AppPayload:
     version: int
     type: int
-    buffer: bytearray
+    address: str
+    buffer: bytes
 
 
 class TransportMultiplexer:

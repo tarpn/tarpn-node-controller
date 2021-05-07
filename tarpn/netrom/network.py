@@ -42,7 +42,7 @@ class NetworkManager(NetRom, L3Handler, LoggingMixin):
 
         def extra():
             return f"[L4 Call={str(config.node_call())} Alias={config.node_alias()}]"
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, extra_func=extra)
 
     async def start(self):
         self.info("Starting NetworkManager")

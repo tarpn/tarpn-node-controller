@@ -2,9 +2,11 @@ import asyncio
 import datetime
 import json
 import math
+import struct
 import threading
 import time
-from typing import Callable, Iterator, Dict
+from io import BytesIO
+from typing import Callable, Iterator, Dict, Collection, List
 
 
 class Timer:
@@ -181,3 +183,168 @@ def json_dump(filename: str, o: Dict):
 def json_load(filename) -> Dict:
     with open(filename, 'r') as fp:
         return json.load(fp, object_hook=json_datetime_object_hook)
+
+
+class VectorClock(Collection[int]):
+    def __init__(self, *args):
+        timestamps = []
+        for arg in args:
+            if isinstance(arg, int):
+                timestamps.append(arg)
+            else:
+                raise ValueError("Expected list of int values")
+        self._timestamps: List[int] = timestamps
+
+    def to_int_list(self):
+        return self._timestamps.copy()
+
+    def copy(self):
+        return self.__copy__()
+
+    def mutable(self):
+        return MutableVectorClock(*self._timestamps)
+
+    def __copy__(self):
+        return VectorClock(*self._timestamps)
+
+    def __repr__(self):
+        return "VectorClock(" + ", ".join(str(t) for t in self._timestamps) + ")"
+
+    def __len__(self) -> int:
+        return len(self._timestamps)
+
+    def __getitem__(self, item):
+        return self._timestamps.__getitem__(item)
+
+    def __iter__(self) -> Iterator[int]:
+        return self._timestamps.__iter__()
+
+    def __contains__(self, item):
+        return self._timestamps.__contains__(item)
+
+    def _assert_comparable(self, other):
+        if not isinstance(other, VectorClock):
+            raise TypeError(f"Cannot compare {other.__class__} with VectorClock")
+        if len(other._timestamps) != len(self._timestamps):
+            raise TypeError(f"Cannot compare {other.__class__} with VectorClock")
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __eq__(self, other):
+        self._assert_comparable(other)
+        for i in range(len(other)):
+            if other[i] != self._timestamps[i]:
+                return False
+        return True
+
+    def __le__(self, other):
+        self._assert_comparable(other)
+        for i in range(len(other)):
+            if self._timestamps[i] > other[i]:
+                return False
+        return True
+
+    def __lt__(self, other):
+        self._assert_comparable(other)
+        return self <= other and self != other
+
+    def __or__(self, other):
+        return (not self <= other) and (not other <= self)
+
+
+class MutableVectorClock(VectorClock):
+    def __setitem__(self, key, value):
+        self._timestamps[key] = value
+
+    def inc_timestamp(self, idx):
+        self[idx] += 1
+        return self
+
+    def set_timestamp(self, idx, timestamp):
+        if self[idx] <= timestamp:
+            self[idx] = timestamp
+            return self
+        else:
+            raise ValueError(f"Timestamps must monotonically increase. "
+                             f"{timestamp} is less than current timestamp {self[idx]}")
+
+
+class ByteUtils:
+    @staticmethod
+    def write_utf8(string: str, buffer: bytearray) -> int:
+        utf8_bytes = string.encode("utf-8")
+        utf8_len = len(utf8_bytes)
+        buffer.extend(struct.pack(">I", utf8_len))
+        buffer.extend(utf8_bytes)
+        return 4 + utf8_len
+
+    @staticmethod
+    def read_utf8(buffer: bytes) -> (str, int):
+        (utf8_len) = struct.unpack(">I", buffer)
+        utf8_bytes = buffer[4: 4 + utf8_len]
+        string = utf8_bytes.decode("utf-8")
+        return string, 4 + utf8_len
+
+    @staticmethod
+    def read_int8(data: BytesIO) -> int:
+        return struct.unpack(">b", data.read(1))[0]
+
+    @staticmethod
+    def write_int8(data: BytesIO, val: int) -> None:
+        data.write(struct.pack(">b", val))
+
+    @staticmethod
+    def read_uint8(data: BytesIO) -> int:
+        return struct.unpack(">B", data.read(1))[0]
+
+    @staticmethod
+    def write_uint8(data: BytesIO, val: int) -> None:
+        data.write(struct.pack(">B", val))
+
+    @staticmethod
+    def read_int16(data: BytesIO) -> int:
+        return struct.unpack(">h", data.read(2))[0]
+
+    @staticmethod
+    def write_int16(data: BytesIO, val: int) -> None:
+        data.write(struct.pack(">h", val))
+
+    @staticmethod
+    def read_uint16(data: BytesIO) -> int:
+        return struct.unpack(">H", data.read(2))[0]
+
+    @staticmethod
+    def write_uint16(data: BytesIO, val: int) -> None:
+        data.write(struct.pack(">H", val))
+
+    @staticmethod
+    def write_hi_lo(data: BytesIO, hi: int, lo: int, hi_n: int):
+        assert hi == hi & (2 ** hi_n - 1)
+        assert lo == lo & (2 ** (8 - hi_n) - 1)
+        byte = (hi << (8 - hi_n)) | lo
+        data.write(struct.pack(">b", byte))
+
+    @staticmethod
+    def hi_bits(byte: int, n: int):
+        return ((byte & 0xFF) >> (8 - n)) & (2**n-1)
+
+    @staticmethod
+    def lo_bits(byte: int, n: int):
+        return byte & (2**n-1)
+
+
+class Time:
+    def time(self) -> int:
+        raise NotImplementedError()
+
+    def datetime(self) -> datetime.datetime:
+        raise NotImplementedError()
+
+
+class WallTime(Time):
+    def time(self) -> float:
+        return time.time() * 1000.
+
+    def datetime(self) -> datetime:
+        return datetime.datetime.utcnow()

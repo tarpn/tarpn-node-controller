@@ -396,7 +396,8 @@ def disconnected_handler(
         event: AX25StateEvent,
         ax25: AX25,
         logger: LoggingMixin) -> AX25StateType:
-    """Handle packets when we are in a disconnected state
+    """
+    Handle packets when we are in a disconnected state
     """
     assert state.current_state == AX25StateType.Disconnected
     if event.event_type == AX25EventType.AX25_UA:
@@ -470,7 +471,8 @@ def awaiting_connection_handler(
         event: AX25StateEvent,
         ax25: AX25,
         logger: LoggingMixin) -> AX25StateType:
-    """Handle packets when we are in a awaiting connection state
+    """
+    Handle packets when we are in a awaiting connection state
     """
     assert state.current_state == AX25StateType.AwaitingConnection
     if event.event_type == AX25EventType.DL_CONNECT:
@@ -669,13 +671,10 @@ def connected_handler(
         state.t3.cancel()
         return AX25StateType.Disconnected
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
-        (info, future) = state.pending_frames.get()
-        ui_frame = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, True,
-                                    info.protocol, info.info)
-        ax25.write_packet(ui_frame)
-        state.pending_frames.task_done()
-        if future:
-            future.set_result(None)  # No ack's needed for unit data
+        pending = cast(InternalInfo, event.packet)
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command,
+                              False, pending.protocol, pending.info)
+        ax25.write_packet(ui)
         return AX25StateType.Connected
     elif event.event_type == AX25EventType.AX25_UI:
         ui_frame = cast(UIFrame, event.packet)
@@ -885,7 +884,7 @@ def timer_recovery_handler(
         return AX25StateType.TimerRecovery
     elif event.event_type == AX25EventType.DL_UNIT_DATA:
         pending = cast(InternalInfo, event.packet)
-        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, True,
+        ui = UIFrame.ui_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
                               pending.protocol, pending.info)
         ax25.write_packet(ui)
         return AX25StateType.TimerRecovery

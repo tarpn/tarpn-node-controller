@@ -1,64 +1,78 @@
 #!/usr/bin/env python
 import logging
+import signal
 import sys
-import time
 
-from tarpn.app.runner import NetworkApp
+from tarpn.app.runner import NetworkApp, Context, AppPlugin
+from tarpn.log import LoggingMixin
 
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
-class MyApp(NetworkApp):
-    def on_connect(self, address):
-        print(f"MyApp got connection from {address}")
-        self.context.write(address, f"Welcome, {address}!".encode("ASCII"))
+class Echo(NetworkApp, LoggingMixin):
+    def __init__(self, environ):
+        NetworkApp.__init__(self, environ)
+        LoggingMixin.__init__(self)
+        self.context = None
 
-    def on_data(self, address, data):
-        print(f"MyApp got data from {address}: {repr(data)}")
-        self.context.write(address, f"You said: {repr(data)}".encode("ASCII"))
+    def on_network_connect(self, address: str):
+        self.debug(f"Network connect to {address}")
 
-    def on_disconnect(self, address):
-        print(f"MyApp got disconnected from {address}")
+    def on_network_data(self, address: str, data: bytes):
+        print(f"Network data from {address}: {data}")
+        s = data.decode("utf-8").strip() + "\r\n"
+        if self.context is not None:
+            self.context.write("ff.ff", f"{address} said: {s}".encode("utf-8"))
 
+    def on_network_disconnect(self, address: str):
+        print(f"Network disconnect from {address}")
 
-class BasicChat:
-    def __init__(self, context, environ, *args, **kwargs):
+    def connection_made(self, context: Context):
+        print(f"Socket connected")
         self.context = context
-        self.connected = set()
-        logging.debug(f"Chat starting, environment is {environ}")
 
-    def on_connect(self, address):
-        logging.debug(f"New connection from {address}")
-        self.context.write(address, f"Welcome, {address}!".encode("utf-8"))
-        time.sleep(0.200)
+    def connection_lost(self):
+        print(f"Socket disconnected")
 
-        for remote_address in self.connected:
-            if address == remote_address:
-                continue
-            logging.debug(f"Sending join notification for {address} to {remote_address}")
-            self.context.write(remote_address, f"{address:<8} joined the chat".encode("utf-8"))
-            time.sleep(0.200)
 
-        self.connected.add(address)
+class EchoPlugin(AppPlugin):
+    def network_app(self, *args) -> NetworkApp:
+        return Echo(environ={})
 
-    def on_data(self, address, data):
-        self.connected.add(address)
 
-        msg = str(data, "utf-8")
-        logging.info(f"{address:<8}: {msg}")
-        for remote_address in self.connected:
-            if address == remote_address:
-                continue
-            logging.debug(f"Forwarding message from {address} to {remote_address}")
-            self.context.write(remote_address, f"{address:<8}: {msg}".encode("utf-8"))
-            time.sleep(0.200)
+class TTY(NetworkApp, LoggingMixin):
+    def __init__(self, environ):
+        NetworkApp.__init__(self, environ)
+        LoggingMixin.__init__(self)
+        self.context = None
 
-    def on_disconnect(self, address):
-        logging.debug(f"Disconnected from {address}")
-        self.connected.remove(address)
+    def connection_made(self, context: Context):
+        self.context = context
 
-        for remote_address in self.connected:
-            if address == remote_address:
-                continue
-            self.context.write(remote_address, f"{remote_address:<8} left the chat".encode("utf-8"))
-            time.sleep(0.200)
+    def connection_lost(self):
+        self.context = None
+
+    def on_network_data(self, address: str, data: bytes):
+        msg = data.decode("utf-8").strip()
+        out = f"{address}: {msg}\r\n"
+        sys.stdout.write(out)
+
+    def handle_stdin(self):
+        line = sys.stdin.readline()
+        if self.context is not None:
+            if line == "":  # Got a ^D
+                self.context.close()
+                signal.raise_signal(signal.SIGTERM)
+            else:
+                line = line.strip()
+                self.context.write("ff.ff", f"{line}\r\n".encode("utf-8"))
+        else:
+            sys.stdout.write("Not connected\r\n")
+            sys.stdout.flush()
+
+
+class TTYAppPlugin(AppPlugin):
+    def network_app(self, loop) -> NetworkApp:
+        tty = TTY(environ={})
+        loop.add_reader(sys.stdin, tty.handle_stdin)
+        return tty

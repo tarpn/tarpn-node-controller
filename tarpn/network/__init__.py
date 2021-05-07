@@ -1,12 +1,11 @@
-import json
-import os
 import queue
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import List, Optional, Tuple
 
 from tarpn.datalink import L2Payload
-from tarpn.transport import L4Protocol
+from tarpn.log import LoggingMixin
+#from tarpn.transport import L4Protocol
 
 
 class QoS(IntEnum):
@@ -17,7 +16,7 @@ class QoS(IntEnum):
     Lowest = 4
 
 
-@dataclass(order=False)
+@dataclass(order=False, eq=True, frozen=True)
 class L3Address:
     pass
 
@@ -50,6 +49,7 @@ class L3PriorityQueue(L3Queueing):
             self._queue.put(packet, False, None)
             return True
         except queue.Full:
+            print("Full!")
             return False
 
     def maybe_take(self) -> Optional[L3Payload]:
@@ -63,24 +63,37 @@ class L3Protocol:
     def can_handle(self, protocol: int) -> bool:
         raise NotImplementedError
 
-    def register_transport_protocol(self, protocol: L4Protocol) -> None:
+    def register_transport_protocol(self, protocol) -> None:
         raise NotImplementedError
 
     def handle_l2_payload(self, payload: L2Payload):
         raise NotImplementedError
 
     def route_packet(self, address: L3Address) -> Tuple[bool, int]:
+        """
+        Indicate if a address is route-able and return the L2 MTU for the link that
+        will be used
+        :param address:
+        :return: a tuple of boolean and int, where the boolean is whether or not
+                the address is route-able and the int is the MTU
+        """
         raise NotImplementedError
 
     def send_packet(self, payload: L3Payload) -> bool:
         raise NotImplementedError
 
     def listen(self, address: L3Address):
+        """
+        When L4 wants to listen for connections at a certain address, it will call
+        this method to inform L3 that it should accept packets for this destination
+        and possibly include them in routing datastructures.
+        """
         raise NotImplementedError
 
 
-class L3Protocols:
+class L3Protocols(LoggingMixin):
     def __init__(self):
+        LoggingMixin.__init__(self)
         self.protocols: List[L3Protocol] = []
 
     def register(self, protocol: L3Protocol):
@@ -95,7 +108,7 @@ class L3Protocols:
                 handled = True
 
         if not handled:
-            print(f"No handler registered for protocol {payload.l3_protocol}, dropping packet")
+            self.debug(f"No L3 handler registered for protocol 0x{payload.l3_protocol:02X}, dropping")
 
 
 class L3RoutingTable:

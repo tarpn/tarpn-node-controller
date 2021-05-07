@@ -1,4 +1,7 @@
-from typing import Dict, Any, List
+from abc import ABC
+from typing import Dict, Any, List, Optional
+
+from tarpn.network import L3Address
 
 
 class L4Address:
@@ -51,6 +54,12 @@ class Transport:
         """Return the current size of the write buffer."""
         raise NotImplementedError
 
+    def local_address(self) -> Optional[L3Address]:
+        raise NotImplementedError
+
+    def remote_address(self) -> Optional[L3Address]:
+        raise NotImplementedError
+
 
 class Protocol:
     def connection_made(self, transport: Transport):
@@ -74,3 +83,13 @@ class Protocol:
 
         The argument is a bytes object.
         """
+
+
+class DatagramProtocol(Protocol):
+    def datagram_received(self, data: bytes, address: L4Address):
+        raise NotImplementedError()
+
+
+class DatagramTransport(Transport, ABC):
+    def write_to(self, address: str, data: Any) -> None:
+        raise NotImplementedError()

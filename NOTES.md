@@ -221,3 +221,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install wheel
 pip install tarpn-core --no-index --find-links .
+
+
+
+http://www.cs.cornell.edu/info/projects/spinglass/public_pdfs/SWIM.pdf

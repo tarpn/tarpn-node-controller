@@ -44,7 +44,7 @@ class DataLinkManager(AX25, LoggingMixin):
 
         def extra():
             return f"[L2 Port={self.link_port} Call={str(self.link_call)}]"
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, extra_func=extra)
 
     async def start(self):
         self.info("Starting DataLinkManager")

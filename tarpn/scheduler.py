@@ -39,7 +39,7 @@ class Scheduler(LoggingMixin):
         self.threads: List[CloseableThread] = list()
         self.shutdown_tasks: List[Callable[..., Any]] = list()
         self._futures: List[Future] = list()
-        super().__init__(logging.getLogger("main"))
+        LoggingMixin.__init__(self)
 
     def timer(self, delay: float, cb: Callable[[], None], auto_start=False) -> Timer:
         timer = ThreadingTimer(delay, cb)

@@ -147,8 +147,8 @@ class NodeConfig(Config):
     def node_call(self) -> str:
         return super().get("node.call")
 
-    def node_name(self) -> str:
-        return super().get("node.name")
+    def node_alias(self) -> str:
+        return super().get("node.alias")
 
     def admin_enabled(self) -> bool:
         return super().get_boolean("admin.enabled")

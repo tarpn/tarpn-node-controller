@@ -1,6 +1,13 @@
 import asyncio
+import itertools
 from asyncio import Protocol, BaseProtocol, Transport, AbstractEventLoop
-from typing import Any
+from typing import Any, Callable, Optional, Dict
+
+from tarpn.datalink.protocol import LinkMultiplexer, L2Protocol
+from tarpn.log import LoggingMixin
+from tarpn.network import L3Queueing, L3PriorityQueue
+from tarpn.scheduler import Scheduler, CloseableThread
+from tarpn.util import Timer
 
 
 class TestTransport(Transport):
@@ -53,18 +60,98 @@ def create_test_connection(loop, protocol_factory, *args, **kwargs):
 
 
 class MockTime:
-    def __init__(self, loop: AbstractEventLoop, initial_time: int):
-        loop.time = self
-        self._loop = loop
+    def __init__(self, initial_time: int = 0):
         self._time = initial_time
 
-    def __call__(self):
+    def time(self):
         return self._time
 
-    def sleep(self, sec, tick=True):
+    def sleep(self, sec):
         self._time += sec
-        if tick:
-            self._loop._run_once()
 
     def tick(self):
-        self._loop._run_once()
+        self._time += 1
+
+
+class MockTimer(Timer):
+    def __init__(self, scheduler: Scheduler, delay: float, cb: Callable[[], None]):
+        super().__init__(delay, cb)
+        self.scheduler = scheduler
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+    def reset(self):
+        pass
+
+    def running(self):
+        return False
+
+    def remaining(self):
+        return 0
+
+
+class MockScheduler(Scheduler):
+    def __init__(self, time: MockTime):
+        LoggingMixin.__init__(self)
+        self.time = time
+        self.tasks = []
+        self.shutdown_tasks = []
+
+    def timer(self, delay: float, cb: Callable[[], None], auto_start=False) -> Timer:
+        t = MockTimer(self, delay, cb)
+        if auto_start:
+            t.start()
+        return t
+
+    def submit(self, thread: CloseableThread):
+        thread.run()
+
+    def run(self, runnable: Callable[..., Any]):
+        runnable()
+
+    def add_shutdown_hook(self, runnable: Callable[..., Any]):
+        self.shutdown_tasks.append(runnable)
+
+    def join(self):
+        return
+
+    def shutdown(self):
+        for task in self.shutdown_tasks:
+            task()
+
+
+class MockLinkMultiplexer(LinkMultiplexer):
+    def __init__(self):
+        self.devices: Dict[int, L2Protocol] = {}
+        self.queues: Dict[int, L3Queueing] = {}
+        self.links: Dict[int, L2Protocol] = {}
+        self.link_id_counter = itertools.count()
+
+    def get_queue(self, link_id: int) -> Optional[L3Queueing]:
+        l2 = self.links.get(link_id)
+        if l2 is not None:
+            return self.queues.get(l2.get_device_id())
+        else:
+            return None
+
+    def register_device(self, l2_protocol: L2Protocol) -> None:
+        self.devices[l2_protocol.get_device_id()] = l2_protocol
+        self.queues[l2_protocol.get_device_id()] = L3PriorityQueue()
+
+    def get_registered_devices(self) -> Dict[int, L2Protocol]:
+        return dict(self.devices)
+
+    def add_link(self, l2_protocol: L2Protocol) -> int:
+        link_id = next(self.link_id_counter)
+        self.links[link_id] = l2_protocol
+        return link_id
+
+    def remove_link(self, link_id: int) -> None:
+        del self.links[link_id]
+
+    def get_link(self, link_id: int) -> Optional[L2Protocol]:
+        return self.links.get(link_id)

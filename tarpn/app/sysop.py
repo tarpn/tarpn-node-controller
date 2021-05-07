@@ -89,7 +89,7 @@ class CommandProcessorProtocol(Protocol, LoggingMixin):
             else:
                 return ""
 
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, extra_func=extra)
         self.info("Created CommandProcessorProtocol")
 
     def println(self, s: str, final=False):

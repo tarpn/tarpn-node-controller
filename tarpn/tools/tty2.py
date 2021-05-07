@@ -9,7 +9,7 @@ from typing import Optional
 from tarpn.ax25 import AX25Call
 from tarpn.datalink import L2FIFOQueue
 from tarpn.datalink.ax25_l2 import AX25Protocol
-from tarpn.datalink.protocol import LinkMultiplexer, L2IOLoop
+from tarpn.datalink.protocol import DefaultLinkMultiplexer, L2IOLoop
 from tarpn.io.kiss import KISSProtocol
 from tarpn.io.serial import SerialDevice
 from tarpn.netrom.router import NetRomRoutingTable
@@ -75,7 +75,7 @@ def main():
     args = parser.parse_args()
 
     # Configure logging
-    main_logger = logging.getLogger("main")
+    main_logger = logging.getLogger("root")
     main_logger.setLevel(logging.ERROR)
     if args.debug:
         main_logger.setLevel(logging.DEBUG)
@@ -100,7 +100,7 @@ def main():
 
     # Initialize I/O device and L2
     l3_protocols = L3Protocols()
-    l2_multi = LinkMultiplexer(L3PriorityQueue, scheduler)
+    l2_multi = DefaultLinkMultiplexer(L3PriorityQueue, scheduler)
     l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
     l2 = AX25Protocol(port_config.port_id(), AX25Call.parse(args.local_call), scheduler,
                       l2_queueing, l2_multi, l3_protocols)

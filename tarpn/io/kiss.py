@@ -19,6 +19,8 @@ class KISSProtocol(IOProtocol, LoggingMixin, MetricsMixin):
                  queue: L2IOQueuing,
                  check_crc: bool = False,
                  hdlc_port: int = 0):
+        LoggingMixin.__init__(self, logging.getLogger("kiss"))
+
         self.port_id = port_id
         self.check_crc = check_crc
         self.hdlc_port = hdlc_port
@@ -32,7 +34,6 @@ class KISSProtocol(IOProtocol, LoggingMixin, MetricsMixin):
         self._buffer = bytearray()
 
         self.closed = False
-        LoggingMixin.__init__(self, logging.getLogger("main"))
 
     def handle_bytes(self, data: bytes) -> None:
         """

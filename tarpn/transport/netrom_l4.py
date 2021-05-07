@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Callable, Dict, Tuple, List, Any, Set
+from typing import Callable, Dict, Tuple, List, Any, Set, Optional
 
 from tarpn.ax25 import AX25Call
 from tarpn.log import LoggingMixin
@@ -13,23 +13,14 @@ from tarpn.settings import NetworkConfig
 from tarpn.transport import Protocol, Transport, L4Protocol, L4Address
 
 
-@dataclass
+@dataclass(eq=True, frozen=True)
 class NetRomCircuitAddress(L4Address):
     callsign: str
     ssid: int
-    node_alias: str
     circuit: int
 
-
-@dataclass(order=True)
-class NetRomPayload:
-    """
-    Passed from L4 to L3
-    """
-    source: NetRomCircuitAddress
-    destination: NetRomCircuitAddress
-    data: bytes
-    # TODO other stuff from NET/ROM? NAK?
+    def __str__(self):
+        return f"netrom://{self.callsign}-{self.ssid}:{self.circuit}"
 
 
 class NetRomTransport(Transport):
@@ -60,6 +51,14 @@ class NetRomTransport(Transport):
     def get_write_buffer_size(self) -> int:
         return 1000
 
+    def local_address(self) -> Optional[NetRomAddress]:
+        return NetRomAddress(self.local_call.callsign,
+                             self.local_call.ssid)
+
+    def remote_address(self) -> Optional[NetRomAddress]:
+        # TODO
+        return None
+
 
 class NetRomTransportProtocol(NetRom, L4Protocol, LoggingMixin):
     def __init__(self, config: NetworkConfig, l3_protocol: L3Protocol, scheduler: Scheduler):
@@ -86,7 +85,7 @@ class NetRomTransportProtocol(NetRom, L4Protocol, LoggingMixin):
         def extra():
             return f"[L4]"
 
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, logging.getLogger("root"), extra)
 
     def handle_packet(self, netrom_packet: NetRomPacket) -> bool:
         """

@@ -20,7 +20,7 @@ from tarpn.settings import Settings
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
 
-logger = logging.getLogger("main")
+logger = logging.getLogger("root")
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 

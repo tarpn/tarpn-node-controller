@@ -70,8 +70,31 @@ class L2Protocol:
         """
         raise NotImplementedError
 
+    def maybe_open_link(self, address: L2Address) -> int:
+        raise NotImplementedError
+
 
 class LinkMultiplexer:
+    def get_link(self, link_id: int) -> Optional[L2Protocol]:
+        raise NotImplementedError
+
+    def get_queue(self, link_id: int) -> Optional[L3Queueing]:
+        raise NotImplementedError
+
+    def register_device(self, l2_protocol: L2Protocol) -> None:
+        raise NotImplementedError
+
+    def get_registered_devices(self) -> Dict[int, L2Protocol]:
+        raise NotImplementedError
+
+    def add_link(self, l2_protocol: L2Protocol) -> int:
+        raise NotImplementedError
+
+    def remove_link(self, link_id: int) -> None:
+        raise NotImplementedError
+
+
+class DefaultLinkMultiplexer(LinkMultiplexer):
     def __init__(self, queue_factory: Callable[[], L3Queueing], scheduler: Scheduler):
         self.queue_factory = queue_factory
         self.link_id_counter = itertools.count()
@@ -102,6 +125,9 @@ class LinkMultiplexer:
                 self.queues[l2_protocol.get_device_id()] = queue
                 self.l2_devices[l2_protocol.get_device_id()] = l2_protocol
                 self.scheduler.submit(L2L3Driver(queue, l2_protocol))
+
+    def get_registered_devices(self) -> Dict[int, L2Protocol]:
+        return dict(self.l2_devices)
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
         with self.lock:

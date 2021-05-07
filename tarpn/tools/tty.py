@@ -193,7 +193,7 @@ def main():
     #loop.create_task(server.serve_forever())
 
     # Configure logging
-    main_logger = logging.getLogger("main")
+    main_logger = logging.getLogger("root")
     main_logger.setLevel(logging.ERROR)
     #packet_logger.addHandler(logging.StreamHandler(sys.stdout))
 

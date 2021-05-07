@@ -6,7 +6,7 @@ from time import sleep
 from typing import Optional, cast
 
 from tarpn.ax25 import AX25Call
-from tarpn.datalink.protocol import LinkMultiplexer
+from tarpn.datalink.protocol import DefaultLinkMultiplexer
 from tarpn.log import LoggingMixin
 from tarpn.netrom.router import NetRomRoutingTable
 from tarpn.network.netrom_l3 import NetRomL3
@@ -19,7 +19,7 @@ from tarpn.transport.netrom_l4 import NetRomTransportProtocol, NetRomTransport
 class NodeCommandProcessor(Protocol, LoggingMixin):
     def __init__(self,
                  config: NetworkConfig,
-                 l2s: LinkMultiplexer,
+                 l2s: DefaultLinkMultiplexer,
                  l3: NetRomL3,
                  l4: NetRomTransportProtocol,
                  scheduler: Scheduler):
@@ -57,7 +57,7 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
                 return f"[Admin {host}:{port}]"
             else:
                 return ""
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, extra_func=extra)
         self.info("Created NodeCommandProcessor")
 
     def connection_made(self, transport: Transport):

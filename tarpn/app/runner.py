@@ -4,7 +4,7 @@ import dataclasses
 import importlib
 import logging
 
-from asyncio import Protocol, transports
+from asyncio import Protocol, transports, AbstractEventLoop
 from concurrent.futures._base import Executor
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
@@ -13,7 +13,6 @@ from typing import Optional, Dict, cast, Any
 import msgpack
 
 from tarpn.app import AppPayload
-from tarpn.ax25 import parse_ax25_call, AX25Call
 from tarpn.log import LoggingMixin
 from tarpn.util import backoff
 
@@ -23,24 +22,17 @@ class Context:
         self.transport = transport
 
     def open(self, address):
-        payload = AppPayload(0, 2, bytearray())
-        ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload.buffer)
+        payload = AppPayload(0, 2, address, bytes())
         msg = msgpack.packb(dataclasses.asdict(payload))
         self.transport.write(msg)
 
     def write(self, address, data):
-        payload = AppPayload(0, 1, bytearray())
-        ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload.buffer)
-        payload.buffer.extend(data)
+        payload = AppPayload(0, 1, address, bytes(data))
         msg = msgpack.packb(dataclasses.asdict(payload))
         self.transport.write(msg)
 
     def close(self, address):
-        payload = AppPayload(0, 3, bytearray())
-        ax25_address = AX25Call.parse(address)
-        ax25_address.write(payload.buffer)
+        payload = AppPayload(0, 3, address, bytes())
         msg = msgpack.packb(dataclasses.asdict(payload))
         self.transport.write(msg)
 
@@ -77,7 +69,7 @@ class AppPlugin:
     def __init__(self, environ: Dict[str, Any]):
         self.environ = environ
 
-    def network_app(self) -> NetworkApp:
+    def network_app(self, loop: AbstractEventLoop) -> NetworkApp:
         raise NotImplementedError
 
     def start(self, executor: Executor) -> None:
@@ -118,17 +110,13 @@ class AppRunnerProtocol(Protocol, LoggingMixin):
             if payload.version != 0:
                 raise RuntimeError(f"Unexpected app protocol version {payload.version}")
 
-            bytes_iter = iter(payload.buffer)
             if payload.type == 0x01:  # Data
-                remote_call = parse_ax25_call(bytes_iter)
-                info = bytes(bytes_iter)
-                getattr(self.network_app, "on_data")(str(remote_call), info)
+                info = bytes(payload.buffer)
+                getattr(self.network_app, "on_network_data")(payload.address, info)
             elif payload.type == 0x02:  # Connect
-                remote_call = parse_ax25_call(bytes_iter)
-                getattr(self.network_app, "on_connect")(str(remote_call))
+                getattr(self.network_app, "on_network_connect")(payload.address)
             elif payload.type == 0x03:  # Disconnect
-                remote_call = parse_ax25_call(bytes_iter)
-                getattr(self.network_app, "on_disconnect")(str(remote_call))
+                getattr(self.network_app, "on_network_disconnect")(payload.address)
             else:
                 raise RuntimeError(f"Unknown message type {payload.type}")
 
@@ -186,7 +174,8 @@ def main():
 
     def run_unix_socket_loop():
         loop = asyncio.new_event_loop()
-        factory = partial(AppRunnerProtocol, app_plugin.network_app(), app_plugin.environ, args.callsign)
+        network_app = app_plugin.network_app(loop)
+        factory = partial(AppRunnerProtocol, network_app, app_plugin.environ, args.callsign)
         loop.create_task(create_and_watch_connection(loop, factory, args.sock))
         loop.run_forever()
 

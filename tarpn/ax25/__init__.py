@@ -228,6 +228,7 @@ class L3Protocol(IntEnum):
     SegmentationFragment = 0x08  # TODO Implement this?
     NetRom = 0xCF
     NoLayer3 = 0xF0
+    NetworkChat = 0xB0
     # TODO include others?
 
     def __repr__(self):

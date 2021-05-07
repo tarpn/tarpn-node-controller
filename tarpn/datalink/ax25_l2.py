@@ -1,13 +1,13 @@
 import logging
 from copy import copy
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, cast
 
 from tarpn.ax25 import decode_ax25_packet, AX25Call, AX25, AX25Packet, L3Protocol, AX25StateType
 from tarpn.ax25.statemachine import AX25StateMachine, AX25StateEvent
 from tarpn.datalink import L2Queuing, FrameData, L2Address, L2Payload
-from tarpn.datalink.protocol import L2Protocol, LinkMultiplexer
-from tarpn.network import L3Protocols, L3Payload
+from tarpn.datalink.protocol import L2Protocol, DefaultLinkMultiplexer
+from tarpn.network import L3Protocols, L3Payload, QoS
 from tarpn.log import LoggingMixin
 from tarpn.scheduler import Scheduler
 from tarpn.util import chunks
@@ -24,6 +24,9 @@ class AX25Address(L2Address):
     def __repr__(self):
         return f"AX25Address({self.callsign}-{self.ssid})"
 
+    def __hash__(self):
+        return hash(repr(self))
+
     def to_ax25_call(self):
         return AX25Call(self.callsign, self.ssid)
 
@@ -37,7 +40,7 @@ class AX25Address(L2Address):
 
 class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def __init__(self, link_port: int, link_call: AX25Call, scheduler: Scheduler, queue: L2Queuing,
-                 link_multiplexer: LinkMultiplexer, l3_protocols: L3Protocols):
+                 link_multiplexer: DefaultLinkMultiplexer, l3_protocols: L3Protocols):
         self.link_port = link_port
         self.link_call = link_call
         self.queue = queue  # l2 buffer
@@ -52,9 +55,11 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
         self.state_machine = AX25StateMachine(self, scheduler.timer)
         self.link_multiplexer.register_device(self)
 
+        self.cq_timer = scheduler.timer(300_000, self._send_cq, True)
+
         def extra():
             return f"[L2 AX25 Port={self.link_port} Call={str(self.link_call)}]"
-        LoggingMixin.__init__(self, logging.getLogger("main"), extra)
+        LoggingMixin.__init__(self, extra_func=extra)
 
     @classmethod
     def maximum_transmission_unit(cls) -> int:
@@ -82,15 +87,15 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def receive_frame(self, frame: FrameData):
         try:
             ax25_packet = decode_ax25_packet(frame.data)
-            self.maybe_create_logical_link(ax25_packet.source)
+            self.maybe_open_link(AX25Address.from_ax25_call(ax25_packet.source))
             if ax25_packet.dest == AX25Call("NODES"):
-                packet_logger.info(f"RX: {ax25_packet}")
+                packet_logger.info(f"[Port={self.link_port}] RX: {ax25_packet}")
                 # Eagerly connect to neighbors sending NODES
                 if self.state_machine.get_state(ax25_packet.source) in (AX25StateType.Disconnected,
                                                                         AX25StateType.AwaitingRelease):
                     self.dl_connect_request(copy(ax25_packet.source))
             else:
-                packet_logger.debug(f"RX: {ax25_packet}")
+                packet_logger.debug(f"[Port={self.link_port}] RX: {ax25_packet}")
         except Exception:
             self.exception(f"Had error parsing packet: {frame}")
             return
@@ -105,16 +110,18 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
 
     def send_packet(self, payload: L3Payload) -> bool:
         remote_call = self.links_by_id.get(payload.link_id)
-        if remote_call is None:
-            self.warning(f"No logical link has been established with id {payload.link_id}, dropping {payload}.")
-            return True
-
-        if self.state_machine.is_window_exceeded(remote_call):
-            self.warning(f"Window exceeded on link {payload.link_id}, dropping {payload}.")
-            return False
 
         if len(payload.buffer) > self.maximum_transmission_unit():
             self.warning("Fragmenting L3 payload for L2 MTU!!")
+
+        if payload.reliable:
+            if remote_call is None:
+                self.warning(f"No logical link has been established with id {payload.link_id}, dropping {payload}.")
+                return True
+
+            if self.state_machine.is_window_exceeded(remote_call):
+                self.warning(f"Window exceeded on link {payload.link_id}, dropping {payload}.")
+                return False
 
         for chunk in chunks(payload.buffer, self.maximum_transmission_unit()):
             if payload.reliable:
@@ -159,19 +166,26 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def write_packet(self, packet: AX25Packet):
         frame = FrameData(self.link_port, packet.buffer)
         if packet.dest == AX25Call("NODES"):
-            packet_logger.debug(f"TX: {packet}")
+            packet_logger.debug(f"[Port={self.link_port}] TX: {packet}")
         else:
-            packet_logger.info(f"TX: {packet}")
+            packet_logger.info(f"[Port={self.link_port}] TX: {packet}")
         if not self.queue.offer_outbound(frame):
             self.warning("Could not send frame, buffer full")
 
     def local_call(self) -> AX25Call:
         return self.link_call
 
-    def maybe_create_logical_link(self, remote_call: AX25Call) -> int:
+    def maybe_open_link(self, address: L2Address) -> int:
+        ax25_address = cast(AX25Address, address)
+        remote_call = ax25_address.to_ax25_call()
         link_id = self.links_by_address.get(remote_call)
         if link_id is None:
             link_id = self.link_multiplexer.add_link(self)
             self.links_by_address[remote_call] = link_id
             self.links_by_id[link_id] = remote_call
         return link_id
+
+    def _send_cq(self):
+        event = AX25StateEvent.dl_unit_data(AX25Call("CQ"), L3Protocol.NoLayer3, "http://tarpn.net".encode("utf-8"))
+        self.state_machine.handle_internal_event(event)
+        self.cq_timer.reset()
