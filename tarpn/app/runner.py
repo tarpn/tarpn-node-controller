@@ -1,8 +1,9 @@
 import argparse
 import asyncio
 import dataclasses
-import importlib
+import importlib.util
 import logging
+import os
 
 from asyncio import Protocol, transports, AbstractEventLoop
 from concurrent.futures._base import Executor
@@ -87,18 +88,16 @@ class AppRunnerProtocol(Protocol, LoggingMixin):
     """
     def __init__(self,
                  network_app: NetworkApp,
-                 environ: Dict[str, Any],
-                 callsign: str):
+                 environ: Dict[str, Any]):
         LoggingMixin.__init__(self)
         self.environ = environ
-        self.app_call = callsign
         self.network_app = network_app
         self.transport = None
         self.closed = False
         self.unpacker = msgpack.Unpacker()
 
     def connection_made(self, transport: transports.BaseTransport) -> None:
-        self.info(f"Connection_made to {transport.get_extra_info('peername')}")
+        self.info(f"Connected to packet engine at {transport.get_extra_info('peername')}")
         self.transport = transport
         self.network_app.connection_made(Context(transport))
 
@@ -125,7 +124,7 @@ class AppRunnerProtocol(Protocol, LoggingMixin):
         self.network_app.connection_lost()
         self.transport = None
         self.closed = True
-        self.info("Connection lost")
+        self.info("Disconnected from packet engine")
 
 
 async def create_and_watch_connection(loop, factory, sock):
@@ -147,8 +146,8 @@ async def create_and_watch_connection(loop, factory, sock):
 
 def main():
     parser = argparse.ArgumentParser(description='Run a TARPN Python application')
-    parser.add_argument("app_factory_module", help="Module and method to create application instance")
-    parser.add_argument("callsign", help="Application's L3 callsign")
+    parser.add_argument("app_file", help="Path to application python file")
+    parser.add_argument("app_class", help="Application plugin class")
     parser.add_argument("sock", help="Domain socket to connect to")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
@@ -159,23 +158,24 @@ def main():
         level = logging.INFO
     logging.basicConfig(level=level, format="%(levelname)-8s %(asctime)s -- %(message)s")
 
-    tokens = args.app_factory_module.split(":")
-    if len(tokens) == 2:
-        # Module + method
-        module = importlib.import_module(tokens[0], package="tarpn.app.runner")
-        app_class = getattr(module, tokens[1])
-    else:
-        raise ValueError("Unsupported format for app_factory_module, expected app_module:app_class")
+    # Load the application file into a module "app" and load the class
+    py_file = os.path.abspath(args.app_file)
+    spec = importlib.util.spec_from_file_location("app", py_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    app_class = getattr(module, args.app_class)
 
     environ = {
-        "app.call": args.callsign
+        "app.file": args.app_file,
+        "app.class": args.app_class,
+        "app.sock": args.sock
     }
     app_plugin: AppPlugin = cast(AppPlugin, app_class(environ))
 
     def run_unix_socket_loop():
         loop = asyncio.new_event_loop()
         network_app = app_plugin.network_app(loop)
-        factory = partial(AppRunnerProtocol, network_app, app_plugin.environ, args.callsign)
+        factory = partial(AppRunnerProtocol, network_app, app_plugin.environ)
         loop.create_task(create_and_watch_connection(loop, factory, args.sock))
         loop.run_forever()
 
