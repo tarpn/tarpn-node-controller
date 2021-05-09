@@ -82,23 +82,23 @@ def run_node(args):
     # Register L3 protocols
     routing_table = tarpn.netrom.router.NetRomRoutingTable.load(
         f"nodes-{node_settings.node_call()}.json", node_settings.node_alias())
-    netrom_l3 = NetRomL3(node_call, node_settings.node_alias(),
-                         scheduler, l2_multi, routing_table)
+    # netrom_l3 = NetRomL3(node_call, node_settings.node_alias(),
+    #                      scheduler, l2_multi, routing_table)
 
     mesh_address = MeshAddress.parse(s.network_configs().get("mesh.address"))
     mesh_l3 = MeshProtocol(WallTime(), mesh_address, l2_multi, scheduler)
-    l3_protocols.register(netrom_l3)
+    # l3_protocols.register(netrom_l3)
     l3_protocols.register(NoLayer3Protocol())
     l3_protocols.register(mesh_l3)
 
     # Create the L4 protocols
-    netrom_l4 = NetRomTransportProtocol(s.network_configs(), netrom_l3, scheduler)
+    # netrom_l4 = NetRomTransportProtocol(s.network_configs(), netrom_l3, scheduler)
     mesh_l4 = DatagramProtocol(mesh_l3)
 
     # Bind the command processor
-    ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), l2s=l2_multi, l3=netrom_l3,
-                          l4=netrom_l4, scheduler=scheduler)
-    netrom_l4.bind_server(node_call, node_settings.node_alias(), ncp_factory)
+    # ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), l2s=l2_multi, l3=netrom_l3,
+    #                       l4=netrom_l4, scheduler=scheduler)
+    # netrom_l4.bind_server(node_call, node_settings.node_alias(), ncp_factory)
 
     # Set up applications
     for app_config in s.app_configs():

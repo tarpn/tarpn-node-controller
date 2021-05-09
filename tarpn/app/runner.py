@@ -120,7 +120,6 @@ class AppRunnerProtocol(Protocol, LoggingMixin):
                 raise RuntimeError(f"Unknown message type {payload.type}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
-        # TODO what now? probably retry the connection forever
         self.network_app.connection_lost()
         self.transport = None
         self.closed = True
