@@ -21,7 +21,7 @@ jobs:
       shell: bash
       run: |
         echo "Cleaning up previous run"
-        rm -rf "$GITHUB_WORKSPACE"
+        rm -rf "$GITHUB_WORKSPACE/*"
     - uses: actions/checkout@v2
     - name: Install dependencies
       run: |
