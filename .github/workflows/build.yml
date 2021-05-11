@@ -38,7 +38,7 @@ jobs:
     - name: Archive prebuilt wheel
       uses: actions/upload-artifact@v2
       with:
-        name: prebuilt-binary-wheel
-        path: dist/*.whl
+        name: dist
+        path: dist
  
 
