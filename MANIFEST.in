@@ -1,2 +1,3 @@
 recursive-include config *.ini
 include app.py
+recursive-exclude tests *

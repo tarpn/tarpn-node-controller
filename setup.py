@@ -3,11 +3,13 @@ from setuptools import setup, find_packages
 
 here = os.path.abspath(os.path.dirname(__file__))
 
+
 def read_file_contents(path):
     import codecs
 
     with codecs.open(path, encoding="utf-8") as f:
         return f.read()
+
 
 EXTRA_REQUIRES = dict(
     develop=[
@@ -27,17 +29,17 @@ EXTRA_REQUIRES = dict(
     ]
 )
 setup(
-    name = 'tarpn-core',
-    version = '0.1.0',
-    packages = ['tarpn'],
-    url = 'https://github.com/tarpn/tarpn-node-controller',
-    license = 'MIT License',
-    author = 'David Arthur',
-    author_email = 'mumrah@gmail.com',
+    name='tarpn-core',
+    version='0.1.0',
+    packages=find_packages(exclude=["tests", "tests.*"]),
+    url='https://github.com/tarpn/tarpn-node-controller',
+    license='MIT License',
+    author='David Arthur',
+    author_email='mumrah@gmail.com',
    
-    description = 'Python networking stack for packet radio',
-    long_description = read_file_contents(os.path.join(here, "README.md")),
-    long_description_content_type = "text/markdown",
+    description='Python networking stack for packet radio',
+    long_description=read_file_contents(os.path.join(here, "README.md")),
+    long_description_content_type="text/markdown",
    
     entry_points={
              'console_scripts': [

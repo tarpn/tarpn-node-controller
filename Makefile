@@ -11,7 +11,7 @@ deps:
 
 .PHONY: dist
 dist:
-	. venv/bin/activate; python setup.py sdist
+	. venv/bin/activate; python setup.py sdist; pip wheel --no-index --no-deps --wheel-dir dist dist/*.tar.gz 
 	ls dist
 
 .PHONY: test
@@ -20,14 +20,15 @@ test:
 
 .PHONY: clean
 clean: ptys-down
-	rm socat_*
-	rm -r dist
+	rm -f socat_*
+	rm -rf dist
+	find . | grep -E "(__pycache__|\.pyc|\.pyo$$)" | xargs rm -rf
 
 ptys-up: pty-A pty-B pty-C
 	ps | grep socat
 
 ptys-down: 
-	pkill socat
+	pkill socat || true
 	ps | grep socat
 
 pty-A:
