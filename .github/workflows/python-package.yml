@@ -30,7 +30,15 @@ jobs:
         python3.7 -m virtualenv venv
         source venv/bin/activate
         pip install -e .[develop]
+        python setup.py bdist_wheel
     - name: Test with pytest
       run: |
         source venv/bin/activate
         pytest
+    - name: Archive prebuilt wheel
+      uses: actions/upload-artifact@v2
+      with:
+        name: prebuilt-binary-wheel
+        path: dist/*.whl
+ 
+
