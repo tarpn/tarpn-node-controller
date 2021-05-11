@@ -9,7 +9,7 @@ from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.header import DatagramHeader, Datagram
 from tarpn.network.mesh.protocol import MeshProtocol
 from tarpn.transport import L4Protocol
-from tests.utils import MockLinkMultiplexer, MockScheduler, MockTime
+from ..utils import MockLinkMultiplexer, MockScheduler, MockTime
 
 
 class MockL2Protocol(L2Protocol):

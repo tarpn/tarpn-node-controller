@@ -3,7 +3,7 @@ import unittest
 from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.header import DatagramHeader, PacketHeader
 from tarpn.network.mesh.protocol import MeshProtocol
-from tests.utils import MockScheduler, MockTime
+from ..utils import MockScheduler, MockTime
 
 
 class TestBroadcast(unittest.TestCase):

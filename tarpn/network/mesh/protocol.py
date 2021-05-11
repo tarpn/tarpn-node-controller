@@ -220,11 +220,6 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         :param buffer the entire buffer of the packet to broadcast
         :param exclude_link_id an L2 link to exclude from the broadcast
         """
-        if exclude_link_id is not None:
-            exclude_device = self.link_multiplexer.get_link(exclude_link_id).get_device_id()
-        else:
-            exclude_device = None
-
         # Map protocol QoS to internal QoS
         if header.qos == 2:
             qos = QoS.Higher
@@ -235,6 +230,10 @@ class MeshProtocol(L3Protocol, LoggingMixin):
 
         for device_id, l2_device in self.link_multiplexer.get_registered_devices().items():
             link_id = l2_device.maybe_open_link(AX25Address("TAPRN"))
+            if exclude_link_id is not None:
+                exclude_device = self.link_multiplexer.get_link(exclude_link_id).get_device_id()
+            else:
+                exclude_device = None
             if exclude_device is not None and l2_device.get_device_id() == exclude_device:
                 continue
 

@@ -29,7 +29,7 @@ EXTRA_REQUIRES = dict(
 setup(
     name = 'tarpn-core',
     version = '0.1.0',
-    packages = find_packages(),
+    packages = ['tarpn'],
     url = 'https://github.com/tarpn/tarpn-node-controller',
     license = 'MIT License',
     author = 'David Arthur',
