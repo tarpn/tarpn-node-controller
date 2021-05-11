@@ -15,7 +15,7 @@ from tarpn.network.mesh.header import Fragment, PDU, Datagram, DatagramHeader, \
 from tarpn.network.mesh import MeshAddress
 from tarpn.scheduler import Scheduler
 from tarpn.transport import L4Protocol
-from tarpn.util import Time, ByteUtils
+from tarpn.util import Time, ByteUtils, chunks
 
 
 class FragmentAssembler:
@@ -170,7 +170,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
 
         self.neighbors: Dict[MeshAddress, datetime] = dict()
         self.datagram_manager: Optional = None
-        self.announce_self()
+        self.announce_timer.start()
 
     def can_handle(self, protocol: int) -> bool:
         return protocol == MeshProtocol.ProtocolId
@@ -267,19 +267,54 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         self.announce_timer.reset()
 
     def send_datagram(self, destination: MeshAddress, datagram_header: DatagramHeader, data: bytes):
-        network_header = PacketHeader(
-            version=0,
-            qos=QoS.Default,
-            protocol=Protocol.DATAGRAM,
-            ttl=7,
-            identity=(self.send_seq % MeshProtocol.WindowSize),
-            length=len(data),
-            source=self.our_address,
-            destination=destination,
-        )
-        buffer = self.parser.encode_packet(network_header, datagram_header, data)
-        self.broadcast(network_header, buffer)
-        self.send_seq += 1
+
+        if len(data) + DatagramHeader.size() > self._max_fragment_size():
+            stream = BytesIO()
+            datagram_header.encode(stream)
+            stream.write(data)
+            stream.seek(0)
+            fragment_idx = 0
+            fragment_size = self._max_fragment_size() - FragmentHeader.size()
+            fragments = list(chunks(stream.read(), fragment_size))
+            for i, fragment in zip(range(len(fragments)), fragments):
+                if i < len(fragments) - 1:
+                    flags = Flags.FRAGMENT
+                else:
+                    flags = Flags.NONE
+                fragment_header = FragmentHeader(
+                    protocol=Protocol.DATAGRAM,
+                    flags=flags,
+                    fragment=fragment_idx,
+                    sequence=(self.send_seq % MeshProtocol.WindowSize)
+                )
+                network_header = PacketHeader(
+                    version=0,
+                    qos=QoS.Default,
+                    protocol=Protocol.FRAGMENT,
+                    ttl=7,
+                    identity=(self.send_seq % MeshProtocol.WindowSize),
+                    length=len(fragment),
+                    source=self.our_address,
+                    destination=destination,
+                )
+                buffer = self.parser.encode_packet(network_header, fragment_header, fragment)
+                self.broadcast(network_header, buffer)
+                self.send_seq += 1
+                fragment_idx += 1
+        else:
+            network_header = PacketHeader(
+                version=0,
+                qos=QoS.Default,
+                protocol=Protocol.DATAGRAM,
+                ttl=7,
+                identity=(self.send_seq % MeshProtocol.WindowSize),
+                length=len(data),
+                source=self.our_address,
+                destination=destination,
+            )
+            buffer = self.parser.encode_packet(network_header, datagram_header, data)
+            self.broadcast(network_header, buffer)
+            self.send_seq += 1
 
     def _max_fragment_size(self):
         # We want uniform packets, so get the min L2 MTU

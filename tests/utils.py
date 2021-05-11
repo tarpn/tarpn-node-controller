@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import itertools
 from asyncio import Protocol, BaseProtocol, Transport, AbstractEventLoop
 from typing import Any, Callable, Optional, Dict
@@ -7,7 +8,7 @@ from tarpn.datalink.protocol import LinkMultiplexer, L2Protocol
 from tarpn.log import LoggingMixin
 from tarpn.network import L3Queueing, L3PriorityQueue
 from tarpn.scheduler import Scheduler, CloseableThread
-from tarpn.util import Timer
+from tarpn.util import Timer, Time
 
 
 class TestTransport(Transport):
@@ -59,12 +60,15 @@ def create_test_connection(loop, protocol_factory, *args, **kwargs):
     return (transport, protocol)
 
 
-class MockTime:
+class MockTime(Time):
     def __init__(self, initial_time: int = 0):
         self._time = initial_time
 
-    def time(self):
+    def time(self) -> float:
         return self._time
+
+    def datetime(self) -> datetime.datetime:
+        return datetime.datetime.fromtimestamp(self.time())
 
     def sleep(self, sec):
         self._time += sec
@@ -155,3 +159,10 @@ class MockLinkMultiplexer(LinkMultiplexer):
 
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
         return self.links.get(link_id)
+
+    def poll(self, link_id: int):
+        queue = self.get_queue(link_id)
+        l3_payload = queue.maybe_take()
+        if l3_payload is not None:
+            self.get_link(link_id).send_packet(l3_payload)
+

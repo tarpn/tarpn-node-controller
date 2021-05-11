@@ -112,7 +112,8 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
         remote_call = self.links_by_id.get(payload.link_id)
 
         if len(payload.buffer) > self.maximum_transmission_unit():
-            self.warning("Fragmenting L3 payload for L2 MTU!!")
+            self.warning(f"Fragmenting L3 payload with size {len(payload.buffer)} for L2 MTU "
+                         f"which is {self.maximum_transmission_unit()}")
 
         if payload.reliable:
             if remote_call is None:

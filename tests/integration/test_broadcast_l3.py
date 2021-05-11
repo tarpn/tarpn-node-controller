@@ -2,9 +2,13 @@ import unittest
 from typing import Dict, Optional
 
 from tarpn.datalink import L2Address, L2Payload, FrameData
+from tarpn.datalink.ax25_l2 import AX25Address
 from tarpn.datalink.protocol import L2Protocol, LinkMultiplexer
 from tarpn.network import L3Payload, L3Protocol
-from tarpn.network.broadcast_l3 import NetworkProtocol, Address
+from tarpn.network.mesh import MeshAddress
+from tarpn.network.mesh.header import DatagramHeader, Datagram
+from tarpn.network.mesh.protocol import MeshProtocol
+from tarpn.transport import L4Protocol
 from tests.utils import MockLinkMultiplexer, MockScheduler, MockTime
 
 
@@ -50,7 +54,7 @@ class MockL2Protocol(L2Protocol):
             self.l3.handle_l2_payload(L2Payload(link_id=0,
                                                 source=L2Address(),
                                                 destination=L2Address(),
-                                                l3_protocol=NetworkProtocol.ProtocolId,
+                                                l3_protocol=MeshProtocol.ProtocolId,
                                                 l3_data=frame.data))
 
     def handle_queue_full(self) -> None:
@@ -76,29 +80,44 @@ class TestBroadcast(unittest.TestCase):
         self.multi_1 = MockLinkMultiplexer()
         self.l2_1 = MockL2Protocol(1, self.multi_1)
         self.multi_1.register_device(self.l2_1)
-        self.node_1 = NetworkProtocol(Address(1), self.multi_1, self.scheduler)
+        self.node_1 = MeshProtocol(self.time, MeshAddress(1), self.multi_1, self.scheduler)
+        self.l2_1.attach_l3(self.node_1)
 
         # Node 2 -- Bob
         self.multi_2 = MockLinkMultiplexer()
         self.l2_2 = MockL2Protocol(1, self.multi_2)
         self.multi_2.register_device(self.l2_2)
-        self.node_2 = NetworkProtocol(Address(2), self.multi_2, self.scheduler)
+        self.node_2 = MeshProtocol(self.time, MeshAddress(2), self.multi_2, self.scheduler)
+        self.l2_2.attach_l3(self.node_2)
 
         # Node 3 -- Carol
         self.multi_3 = MockLinkMultiplexer()
         self.l2_3 = MockL2Protocol(1, self.multi_3)
         self.multi_3.register_device(self.l2_3)
-        self.node_3 = NetworkProtocol(Address(3), self.multi_3, self.scheduler)
+        self.node_3 = MeshProtocol(self.time, MeshAddress(3), self.multi_3, self.scheduler)
+        self.l2_3.attach_l3(self.node_3)
 
         self.l2_1.connect_to(self.l2_2)
+        self.l2_2.connect_to(self.l2_3)
 
     def test_send_receive(self):
-        self.node_1.announce_self()
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+        msg = "Hello, Node 3".encode("utf-8")
+        header = DatagramHeader(source=100, destination=100, length=len(msg), checksum=0)
 
-        #node_1_link_id = self.l2_1.maybe_open_link(AX25Address("TAPRN"))
-        #packet = self.multi_1.get_queue(node_1_link_id).maybe_take()
-        #self.assertEqual(packet.protocol, BroadcastProtocol.ProtocolId)
+        class MockTransportManager(L4Protocol):
+            def handle_datagram(self, datagram: Datagram):
+                print(datagram)
 
-        #node_2_link_id = self.l2_2.maybe_open_link(AX25Address("TAPRN"))
+        self.node_3.register_transport_protocol(MockTransportManager())
 
-        self.assertEqual(self.node_2.delivered.get(1), 1)
+        self.node_1.send_datagram(MeshAddress(3), header, msg)
+        link_id_1 = self.l2_1.maybe_open_link(AX25Address("TAPRN"))
+        self.multi_1.poll(link_id_1)
+
+        link_id_2 = self.l2_2.maybe_open_link(AX25Address("TAPRN"))
+        self.multi_2.poll(link_id_2)
+
+        link_id_3 = self.l2_3.maybe_open_link(AX25Address("TAPRN"))
+        self.multi_3.poll(link_id_3)

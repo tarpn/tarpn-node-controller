@@ -93,7 +93,8 @@ class FragmentHeader(Header):
                    fragment=fragment,
                    sequence=sequence)
 
-    def size(self) -> int:
+    @staticmethod
+    def size() -> int:
         return 4
 
     def encode(self, data: BytesIO):
@@ -120,7 +121,8 @@ class DatagramHeader(Header):
                    length=length,
                    checksum=checksum)
 
-    def size(self) -> int:
+    @staticmethod
+    def size() -> int:
         return 6
 
     def encode(self, data: BytesIO):
