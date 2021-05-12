@@ -1,12 +1,13 @@
 import asyncio
 import datetime
-import itertools
-from asyncio import Protocol, BaseProtocol, Transport, AbstractEventLoop
-from typing import Any, Callable, Optional, Dict
+from asyncio import Protocol, BaseProtocol, Transport
+from typing import Any, Callable, Optional, Dict, Iterator
 
+import tarpn.ax25
+from tarpn.datalink import L2Payload, L2Address
 from tarpn.datalink.protocol import LinkMultiplexer, L2Protocol
 from tarpn.log import LoggingMixin
-from tarpn.network import L3Queueing, L3PriorityQueue
+from tarpn.network import L3Payload, L3Protocol
 from tarpn.scheduler import Scheduler, CloseableThread
 from tarpn.util import Timer, Time
 
@@ -130,39 +131,45 @@ class MockScheduler(Scheduler):
 
 class MockLinkMultiplexer(LinkMultiplexer):
     def __init__(self):
-        self.devices: Dict[int, L2Protocol] = {}
-        self.queues: Dict[int, L3Queueing] = {}
-        self.links: Dict[int, L2Protocol] = {}
-        self.link_id_counter = itertools.count()
+        self.neighbors: Dict[int, L3Protocol] = {}
 
-    def get_queue(self, link_id: int) -> Optional[L3Queueing]:
-        l2 = self.links.get(link_id)
-        if l2 is not None:
-            return self.queues.get(l2.get_device_id())
+    def attach_neighbor(self, link_id: int, protocol: L3Protocol):
+        self.neighbors[link_id] = protocol
+
+    def offer(self, payload: L3Payload) -> bool:
+        neighbor = self.neighbors.get(payload.link_id)
+        if neighbor is not None:
+            l2 = L2Payload(
+                link_id=payload.link_id,
+                source=L2Address(),
+                destination=L2Address(),
+                l3_protocol=tarpn.ax25.L3Protocol(payload.protocol),
+                l3_data=payload.buffer
+            )
+            neighbor.handle_l2_payload(l2)
+            return True
         else:
-            return None
+            return False
+
+    def mtu(self) -> int:
+        return 100
+
+    def links_for_address(self,
+                          l2_address: L2Address,
+                          exclude_device_with_link_id: Optional[int] = None) -> Iterator[int]:
+        for link_id in self.neighbors.keys():
+            if link_id == exclude_device_with_link_id:
+                continue
+            yield link_id
 
     def register_device(self, l2_protocol: L2Protocol) -> None:
-        self.devices[l2_protocol.get_device_id()] = l2_protocol
-        self.queues[l2_protocol.get_device_id()] = L3PriorityQueue()
-
-    def get_registered_devices(self) -> Dict[int, L2Protocol]:
-        return dict(self.devices)
+        pass
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
-        link_id = next(self.link_id_counter)
-        self.links[link_id] = l2_protocol
-        return link_id
+        return -1
 
     def remove_link(self, link_id: int) -> None:
-        del self.links[link_id]
+        pass
 
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
-        return self.links.get(link_id)
-
-    def poll(self, link_id: int):
-        queue = self.get_queue(link_id)
-        l3_payload = queue.maybe_take()
-        if l3_payload is not None:
-            self.get_link(link_id).send_packet(l3_payload)
-
+        return None

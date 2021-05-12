@@ -1,7 +1,7 @@
 import itertools
 import threading
 from time import sleep
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Iterator
 
 from tarpn.datalink import FrameData, L2Queuing, L2Address
 from tarpn.log import LoggingMixin
@@ -76,21 +76,30 @@ class L2Protocol:
 
 class LinkMultiplexer:
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
+        #  Only used to get device id from L2
         raise NotImplementedError
 
-    def get_queue(self, link_id: int) -> Optional[L3Queueing]:
+    def offer(self, payload: L3Payload):
+        raise NotImplementedError
+
+    def mtu(self) -> int:
+        raise NotImplementedError
+
+    def links_for_address(self,
+                          l2_address: L2Address,
+                          exclude_device_with_link_id: Optional[int] = None) -> Iterator[int]:
         raise NotImplementedError
 
     def register_device(self, l2_protocol: L2Protocol) -> None:
-        raise NotImplementedError
-
-    def get_registered_devices(self) -> Dict[int, L2Protocol]:
+        #  Used by AX25Protocol to register itself
         raise NotImplementedError
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
+        #  Used in AX25Protocol to create links in maybe_open_link
         raise NotImplementedError
 
     def remove_link(self, link_id: int) -> None:
+        #  Not used (yet)
         raise NotImplementedError
 
 
@@ -111,12 +120,33 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
         return self.logical_links.get(link_id)
 
-    def get_queue(self, link_id: int) -> Optional[L3Queueing]:
-        l2 = self.logical_links.get(link_id)
+    def offer(self, payload: L3Payload) -> bool:
+        l2 = self.logical_links.get(payload.link_id)
         if l2 is not None:
-            return self.queues.get(l2.get_device_id())
+            return self.queues.get(l2.get_device_id()).offer(payload)
         else:
-            return None
+            return False
+
+    def mtu(self) -> int:
+        return min([l2.maximum_transmission_unit() for l2 in self.l2_devices.values()])
+
+    def links_for_address(self,
+                          l2_address: L2Address,
+                          exclude_device_with_link_id: Optional[int] = None) -> Iterator[int]:
+        # Determine which device to exclude
+        if exclude_device_with_link_id is not None:
+            exclude_device = self.get_link(exclude_device_with_link_id).get_device_id()
+        else:
+            exclude_device = None
+
+        # Yield the links for the devices
+        for l2_device in self.l2_devices.values():
+            link_id = l2_device.maybe_open_link(l2_address)
+
+            if exclude_device is not None and l2_device.get_device_id() == exclude_device:
+                continue
+            else:
+                yield link_id
 
     def register_device(self, l2_protocol: L2Protocol):
         with self.lock:
@@ -125,9 +155,6 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
                 self.queues[l2_protocol.get_device_id()] = queue
                 self.l2_devices[l2_protocol.get_device_id()] = l2_protocol
                 self.scheduler.submit(L2L3Driver(queue, l2_protocol))
-
-    def get_registered_devices(self) -> Dict[int, L2Protocol]:
-        return dict(self.l2_devices)
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
         with self.lock:

@@ -115,7 +115,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                 if link_to_route is not None:
                     l3_payload = L3Payload(source_address, dest_address,
                                            0xCF, netrom_packet.buffer, link_to_route, QoS.Default, True)
-                    if self.link_multiplexer.get_queue(link_to_route).offer(l3_payload):
+                    if self.link_multiplexer.offer(l3_payload):
                         packet_logger.info(f"FWD: {netrom_packet}")
                     else:
                         packet_logger.info(f"DROP: {netrom_packet}")
@@ -136,7 +136,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
         link_to_route = self.router.route1(payload.destination)
         if link_to_route is not None:
             payload.link_id = link_to_route
-            if self.link_multiplexer.get_queue(payload.link_id).offer(payload):
+            if self.link_multiplexer.offer(payload):
                 packet_logger.info(f"TX: {payload}")
                 return True
             else:
@@ -169,5 +169,5 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                 link_id = l2.maybe_open_link(AX25Address("NODES"))
                 payload = L3Payload(L3Address(), L3Address(), 0xCF, chunk, link_id, QoS.Lowest, reliable=False)
                 packet_logger.debug(f"TX: {payload}")
-                self.link_multiplexer.get_queue(link_id).offer(payload)
+                self.link_multiplexer.offer(payload)
 

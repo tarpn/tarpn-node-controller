@@ -1,9 +1,10 @@
 import dataclasses
+import logging
 import operator
 from collections import defaultdict
 from datetime import datetime
 from io import BytesIO
-from typing import Tuple, List, Dict, Optional, Any, Set, cast
+from typing import Tuple, List, Dict, Optional, Set, cast
 
 from tarpn.datalink import L2Payload
 from tarpn.datalink.ax25_l2 import AX25Address
@@ -15,7 +16,7 @@ from tarpn.network.mesh.header import Fragment, PDU, Datagram, DatagramHeader, \
 from tarpn.network.mesh import MeshAddress
 from tarpn.scheduler import Scheduler
 from tarpn.transport import L4Protocol
-from tarpn.util import Time, ByteUtils, chunks
+from tarpn.util import Time, chunks
 
 
 class FragmentAssembler:
@@ -103,25 +104,26 @@ class TTLCache:
     def __init__(self, time: Time, expiry_ms: int):
         self.time = time
         self.expiry_ms = expiry_ms
-        self.cache: Set[Any] = set()
-        self.seen: List[Tuple[int, Any]] = list()
+        self.cache: Set[int] = set()
+        self.seen: List[Tuple[int, int]] = list()
 
     def contains(self, header: PacketHeader) -> bool:
+        header_hash = hash(header)
         """Check if a packet header has been seen before"""
         now = self.time.time()
         removed = []
-        for i, (t, item) in zip(range(len(self.seen)), self.seen):
-            if t > now:
+        for i, (expire, item) in zip(range(len(self.seen)), self.seen):
+            if now > expire:
                 removed.append(i)
                 self.cache.remove(item)
-        for i in removed:
+        for i in removed[::-1]:
             del self.seen[i]
 
-        if header in self.cache:
+        if header_hash in self.cache:
             return True
         else:
-            self.cache.add(header)
-            self.seen.append((now, header))
+            self.cache.add(header_hash)
+            self.seen.append((now + self.expiry_ms, header_hash))
             return False
 
 
@@ -152,7 +154,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
                  our_address: MeshAddress,
                  link_multiplexer: LinkMultiplexer,
                  scheduler: Scheduler):
-        LoggingMixin.__init__(self)
+        LoggingMixin.__init__(self, extra_func=self.log_ident)
         self.time = time
         self.link_multiplexer = link_multiplexer
         self.our_address = our_address
@@ -172,6 +174,9 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         self.datagram_manager: Optional = None
         self.announce_timer.start()
 
+    def log_ident(self) -> str:
+        return f"[MeshProtocol {self.our_address}]"
+
     def can_handle(self, protocol: int) -> bool:
         return protocol == MeshProtocol.ProtocolId
 
@@ -185,12 +190,12 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         self.debug(f"Incoming packet {header}")
 
         if header.destination == self.our_address:
-            self.handle_local_packet(header, stream)
+            self.deliver_local(header, stream)
             return
 
         if header.destination == self.BroadcastAddress:
             # handle it locally and forward
-            self.handle_local_packet(header, stream)
+            self.deliver_local(header, stream)
 
         if header.ttl > 1:
             # Decrease the TTL, clear the origin flag
@@ -200,17 +205,17 @@ class MeshProtocol(L3Protocol, LoggingMixin):
             stream.seek(0)
             self.broadcast(header_copy, stream.read(), exclude_link_id=payload.link_id)
 
-    def handle_local_packet(self, header: PacketHeader, stream: BytesIO):
+    def deliver_local(self, header: PacketHeader, stream: BytesIO):
         payload = self.parser.decode_packet(header, stream)
         if payload is not None:
-            self.debug(f"Handling {payload}")
+            self.debug(f"Delivering {payload}")
             if isinstance(payload, Datagram) and self.datagram_manager is not None:
                 self.datagram_manager.handle_datagram(payload)
             elif isinstance(payload, Announce):
                 announce = cast(Announce, payload)
                 self.neighbors[announce.network_header.source] = self.time.datetime()
             else:
-                self.warning(f"Unhandled payload {payload}")
+                self.warning(f"Tried to deliver payload {payload}, but there were no handlers")
 
     def broadcast(self, header: PacketHeader, buffer: bytes, exclude_link_id: Optional[int] = None):
         """Broadcast a packet to all available L2 links, optionally excluding the link
@@ -228,16 +233,8 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         else:
             qos = QoS.Default
 
-        for device_id, l2_device in self.link_multiplexer.get_registered_devices().items():
-            link_id = l2_device.maybe_open_link(AX25Address("TAPRN"))
-            if exclude_link_id is not None:
-                exclude_device = self.link_multiplexer.get_link(exclude_link_id).get_device_id()
-            else:
-                exclude_device = None
-            if exclude_device is not None and l2_device.get_device_id() == exclude_device:
-                continue
-
-            msg = L3Payload(
+        for link_id in self.link_multiplexer.links_for_address(AX25Address("TAPRN"), exclude_link_id):
+            payload = L3Payload(
                 source=header.source,
                 destination=header.destination,
                 protocol=MeshProtocol.ProtocolId,
@@ -245,8 +242,8 @@ class MeshProtocol(L3Protocol, LoggingMixin):
                 link_id=link_id,
                 qos=qos,
                 reliable=False)
-            self.debug(f"Forwarding {msg}")
-            self.send_packet(msg)
+            self.debug(f"Forwarding {payload}")
+            self.link_multiplexer.offer(payload)
 
     def announce_self(self):
         self.info("Sending announce")
@@ -266,7 +263,6 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         self.announce_timer.reset()
 
     def send_datagram(self, destination: MeshAddress, datagram_header: DatagramHeader, data: bytes):
-
         if len(data) + DatagramHeader.size() > self._max_fragment_size():
             stream = BytesIO()
             datagram_header.encode(stream)
@@ -317,9 +313,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
 
     def _max_fragment_size(self):
         # We want uniform packets, so get the min L2 MTU
-        l2s = self.link_multiplexer.get_registered_devices().values()
-        l2_mtu = min([l2.maximum_transmission_unit() for l2 in l2s])
-        return l2_mtu - MeshProtocol.HeaderBytes
+        return self.link_multiplexer.mtu() - MeshProtocol.HeaderBytes
 
     def route_packet(self, address: L3Address) -> Tuple[bool, int]:
         # Subtract L3 header size and multiply by max fragments
@@ -327,7 +321,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         return True, l3_mtu
 
     def send_packet(self, payload: L3Payload) -> bool:
-        return self.link_multiplexer.get_queue(payload.link_id).offer(payload)
+        return self.link_multiplexer.offer(payload)
 
     def listen(self, address: MeshAddress):
         # By default we listen for all addresses

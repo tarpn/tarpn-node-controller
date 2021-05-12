@@ -5,11 +5,58 @@ from tarpn.crc import crcb
 from tarpn.network import QoS
 from tarpn.network.mesh.header import PacketHeader, Protocol, MeshAddress, DatagramHeader, \
     FragmentHeader, Flags
-from tarpn.network.mesh.protocol import PacketCodec
+from tarpn.network.mesh.protocol import PacketCodec, TTLCache
+from ..utils import MockTime
 
 
 class TestMeshHeaders(unittest.TestCase):
     codec = PacketCodec()
+
+    def test_ttl_cache(self):
+        time = MockTime()
+        cache = TTLCache(time, 10)
+
+        header = PacketHeader(
+            version=0,
+            protocol=Protocol.DATAGRAM,
+            qos=QoS.Default,
+            ttl=4,
+            identity=42,
+            length=0,
+            source=MeshAddress(1),
+            destination=MeshAddress(2))
+
+        self.assertFalse(cache.contains(header))
+        self.assertTrue(cache.contains(header))
+
+        same_header = PacketHeader(
+            version=0,
+            protocol=Protocol.DATAGRAM,
+            qos=QoS.Default,
+            ttl=4,
+            identity=42,
+            length=0,
+            source=MeshAddress(1),
+            destination=MeshAddress(2))
+
+        self.assertTrue(cache.contains(same_header))
+
+        diff_header = PacketHeader(
+            version=0,
+            protocol=Protocol.DATAGRAM,
+            qos=QoS.Default,
+            ttl=4,
+            identity=43,
+            length=0,
+            source=MeshAddress(1),
+            destination=MeshAddress(2))
+
+        self.assertFalse(cache.contains(diff_header))
+        self.assertTrue(cache.contains(diff_header))
+
+        time.sleep(11)
+        self.assertFalse(cache.contains(header))
+        self.assertFalse(cache.contains(diff_header))
 
     def test_encode_decode_datagram(self):
         msg = "Hello, World!".encode("utf-8")
