@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import datetime
 import logging
 import signal
 import sys
@@ -54,7 +55,8 @@ class TTY(NetworkApp, LoggingMixin):
 
     def on_network_data(self, address: str, data: bytes):
         msg = data.decode("utf-8").strip()
-        out = f"{address}: {msg}\r\n"
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out = f"{now} -- {address} -- {msg}\r\n"
         sys.stdout.write(out)
 
     def handle_stdin(self):
