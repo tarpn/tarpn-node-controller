@@ -1,6 +1,7 @@
 # TARPN Node Controller
 
 [![experimental](http://badges.github.io/stability-badges/dist/experimental.svg)](http://github.com/badges/stability-badges)
+[![build](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml/badge.svg)](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml)
 
 Pure Python implementation of a TNC (Terminal Node Controller).
 
