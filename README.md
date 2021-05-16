@@ -4,35 +4,6 @@
 
 Pure Python implementation of a TNC (Terminal Node Controller).
 
-# Development
-
-## Local setup
-
-Create a virtualenv, activate, and install deps (using Python 3)
-
-```
-make init
-make deps
-```
-
-Run the tests
-
-```
-make test
-```
-
-Now some "tarpn-" scripts are in your path. E.g.,
-
-```
-tarpn-packet-dump /tmp/vmodem0 9600
-```
-
-Run flake8
-
-```
-flake8 tarpn
-```
-
 ## RaspberryPi Setup
 
 Install Python 3.7, pip, and virtualenv
@@ -42,23 +13,64 @@ sudo apt-get install python3.7 python3-pip
 pip3 install virtualenv
 ```
 
-Create a virtual python environment for tarpn-node-controller to run in and install it
+## Mac OS Setup
 
-```
-python3 -m virtualenv venv
-source venv/bin/activate
-python setup.py install
+TODO
+
+## Installation
+
+Create a Python environment with Python 3.7+
+
+```sh
+python3 -m virtualenv ~/tarpn-env
 ```
 
+Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
+
+```sh
+~/tarpn-env/bin/pip install https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.0/tarpn_core-0.1.0-py3-none-any.whl
+```
+
+Run the core packet engine
+
+```sh
+~/tarpn-env/bin/tarpn-node2 config.ini
+```
+
+
+# Development
+
+## Local setup
+
+Create a virtualenv, activate, and install deps (using Python 3)
+
+```sh
+make init
+make deps
+```
+
+Run the tests
+
+```sh
+make test
+```
+
+Now some "tarpn-" scripts are in your path. E.g.,
+
+```sh
+tarpn-packet-dump /tmp/vmodem0 9600
+```
+
+Run flake8
+
+```sh
+flake8 tarpn
+```
 
 
 ## Docker setup
 
-```
+```sh
 docker build . -t tarpn
 docker run tarpn:latest
 ```
-
-# References
-
-* https://tinkering.xyz/async-serial/
