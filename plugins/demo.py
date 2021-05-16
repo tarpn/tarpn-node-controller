@@ -14,7 +14,7 @@ class TTY(NetworkApp, LoggingMixin):
         NetworkApp.__init__(self, environ)
         LoggingMixin.__init__(self)
         self.context = None
-        self.info(f"Created TTY with {environ}")
+        self.info(f"Created with {environ}")
 
     def connection_made(self, context: Context):
         self.context = context
@@ -42,7 +42,7 @@ class TTY(NetworkApp, LoggingMixin):
             sys.stdout.flush()
 
 
-class TTYAppPlugin(AppPlugin):
+class DemoApp(AppPlugin):
     def network_app(self, loop) -> NetworkApp:
         tty = TTY(environ=self.environ)
         loop.add_reader(sys.stdin, tty.handle_stdin)
