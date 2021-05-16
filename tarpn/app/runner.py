@@ -158,12 +158,15 @@ def main():
     logging.basicConfig(level=level, format="%(levelname)-8s %(asctime)s -- %(message)s")
 
     # Load the application file into a module "app" and load the class
-    py_file = os.path.abspath(args.app_file)
-    spec = importlib.util.spec_from_file_location("app", py_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    if args.app_file.endswith(".py"):
+        py_file = os.path.abspath(args.app_file)
+        spec = importlib.util.spec_from_file_location("app", py_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        module = importlib.import_module(args.app_file, "app")
     app_class = getattr(module, args.app_class)
-
+    
     environ = {
         "app.file": args.app_file,
         "app.class": args.app_class,
