@@ -30,7 +30,7 @@ EXTRA_REQUIRES = dict(
 )
 setup(
     name='tarpn-core',
-    version='0.1.0',
+    version='0.1.1',
     packages=find_packages(exclude=["tests", "tests.*"]),
     data_files=[
         ("config", ["config/node.ini", "config/logging.ini"])
