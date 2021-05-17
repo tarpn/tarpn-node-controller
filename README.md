@@ -76,12 +76,12 @@ app.alias = DEMO
 app.sock = /tmp/tarpn-demo.sock
 ```
 
-## Running
+# Usage
 
 Run the core packet engine
 
 ```sh
-./bin/tarpn-node2
+./bin/tarpn-node
 ```
 
 In a separate shell, run the demo app. 
@@ -91,6 +91,7 @@ In a separate shell, run the demo app.
 ```
 This app is a simple terminal chat program that lets you easily test out
 the network with other participants.
+
 # Development
 
 ## Local setup
