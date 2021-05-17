@@ -32,6 +32,9 @@ setup(
     name='tarpn-core',
     version='0.1.0',
     packages=find_packages(exclude=["tests", "tests.*"]),
+    data_files=[
+        ("config", ["config/node.ini", "config/logging.ini"])
+    ],
     url='https://github.com/tarpn/tarpn-node-controller',
     license='MIT License',
     author='David Arthur',

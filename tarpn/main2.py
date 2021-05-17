@@ -2,6 +2,7 @@ import argparse
 import logging
 import logging.config
 import os
+import sys
 from functools import partial
 from typing import Dict
 
@@ -33,7 +34,7 @@ logger = logging.getLogger("root")
 
 def main():
     parser = argparse.ArgumentParser(description='Decode packets from a serial port')
-    parser.add_argument("config", help="Config file")
+    parser.add_argument("config", nargs="?", default="config/node.ini", help="Config file")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--profile", action="store_true", help="Attache a profiler to the process")
     args = parser.parse_args()
@@ -52,11 +53,17 @@ def run_node(args):
     s = Settings(".", args.config)
     node_settings = s.node_config()
     node_call = AX25Call.parse(node_settings.node_call())
+    if node_call.callsign == "N0CALL":
+        print("Callsign is missing from config. Please see instructions here "
+              "https://github.com/tarpn/tarpn-node-controller")
+        sys.exit(1)
 
     # Setup logging
     logging_config_file = node_settings.get("log.config", "not_set")
     if logging_config_file != "not_set":
         log_dir = node_settings.get("log.dir")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
         logging.config.fileConfig(
             logging_config_file, defaults={"log.dir": log_dir}, disable_existing_loggers=False)
 

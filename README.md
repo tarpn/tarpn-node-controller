@@ -1,84 +1,96 @@
 # TARPN Node Controller
 
 [![experimental](http://badges.github.io/stability-badges/dist/experimental.svg)](http://github.com/badges/stability-badges)
+
 [![build](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml/badge.svg)](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml)
 
 Pure Python implementation of a TNC (Terminal Node Controller).
 
-## RaspberryPi Setup
+# Installation
 
-Install Python 3.7, pip, and virtualenv
+## System Requirements
+
+On Linux (including Raspbian) install Python 3.7, pip, and virtualenv
 
 ```
 sudo apt-get install python3.7 python3-pip
 pip3 install virtualenv
 ```
 
-## Mac OS Setup
+On Mac OS:
 
-TODO
+```
+brew install python3
+pip3 install virtualenv
+```
 
-## Installation
+## Install the software
 
-Create a Python environment with Python 3.7+
+Create a Python environment with Python 3.7+ and enter it
 
 ```sh
-python3 -m virtualenv ~/tarpn-env
+python3 -m virtualenv ~/tarpn-env; cd ~/tarpn-env
 ```
+
+_All further steps in this section assume you are in the ~/tarpn-env directory_
 
 Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
 
 ```sh
-~/tarpn-env/bin/pip install https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.0/tarpn_core-0.1.0-py3-none-any.whl
+./bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.0/tarpn_core-0.1.0-py3-none-any.whl
 ```
 
 ## Configuration
 
-A minimal configuration:
+Edit the included config file `config/node.ini`. At a minimum, set `mycall` and `node.locator`. 
+The `mesh.address` must be coordinated within your network to be unique. Below is the included config file
 
 ```ini
+[default]
+mycall = N0CALL
+
 [node]
-log.dir = /tmp/tarpn-logs
+log.dir = logs
 log.config = config/logging.ini
-node.call = N0CALL
-node.alias = NODE2
-node.locator = FM05
+
+node.call = ${mycall}-1
+node.alias = NODE1
+node.locator = FM06rb
 
 [port:1]
-port.enabled = True
+port.enabled = False
 port.type = serial
 port.framing = kiss
 kiss.checksum = false
-serial.device = /dev/ttyACM0
-serial.speed = 57600
+serial.device = /tmp/vmodem_A0
+serial.speed = 9600
 
 [network]
-mesh.address = 0f.42
+mesh.address = 00.aa
 mesh.ttl = 7
 
-[app:tty]
-app.call = N0CALL
-app.alias = TTY
+[app:demo]
 app.address = mesh://ff.ff:100
-app.sock = /tmp/tarpn-tty.sock
+app.call = ${mycall}-2
+app.alias = DEMO
+app.sock = /tmp/tarpn-demo.sock
 ```
-
-At a minimum, set `node.call` and `node.locator`. The `mesh.address` must be coordinated within your network to be unique.
 
 ## Running
 
 Run the core packet engine
 
 ```sh
-~/tarpn-env/bin/tarpn-node2 config.ini
+./bin/tarpn-node2
 ```
 
-Run the demo app in a separate shell
+In a separate shell, run the demo app. 
 
 ```sh
-~/tarpn-env/bin/tarpn-app app.py TTYAppPlugin /tmp/tarpn-tty.sock
+./tarpn-app plugins.demo DemoApp /tmp/tarpn-demo.sock
 ```
-
+This app is a simple terminal chat program that lets you easily test out
+the network with other participants.
 # Development
 
 ## Local setup
