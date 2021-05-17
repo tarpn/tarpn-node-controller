@@ -47,13 +47,8 @@ setup(
     entry_points={
              'console_scripts': [
                  'tarpn-serial-dump = tarpn.tools.serial_dump:main',
-                 'tarpn-kiss-cat = tarpn.tools.kiss_cat:main',
                  'tarpn-packet-dump = tarpn.tools.packet_dump:main',
                  'tarpn-node = tarpn.main:main',
-                 'tarpn-node2 = tarpn.main2:main',
-                 'kiss-bench = tarpn.tools.kiss_bench:main',
-                 'tarpn-tty = tarpn.tools.tty:main',
-                 'tarpn-tty2 = tarpn.tools.tty2:main',
                  'tarpn-app = tarpn.app.runner:main'
              ]},
     python_requires='>=3.7',

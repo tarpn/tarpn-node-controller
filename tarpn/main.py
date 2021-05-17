@@ -1,130 +1,135 @@
 import argparse
-import asyncio
 import logging
 import logging.config
-from asyncio import Protocol, transports, BaseTransport, Transport
-from logging.handlers import TimedRotatingFileHandler
+import os
 import sys
 from functools import partial
-from typing import Optional
+from typing import Dict
 
-from tarpn.app import NetromAppProtocol, TransportMultiplexer, MultiplexingProtocol
-from tarpn.app.sysop import CommandProcessorProtocol, DataLinkAdapter
+from pyformance.reporters import ConsoleReporter
+
+import tarpn.netrom.router
+from tarpn.application import TransportMultiplexer, MultiplexingProtocol, ApplicationProtocol
+from tarpn.application.command import NodeCommandProcessor
 from tarpn.ax25 import AX25Call
-from tarpn.ax25.datalink import DataLinkManager, IdHandler
-from tarpn.events import EventBus, EventListener
-from tarpn.netrom.network import NetworkManager
-from tarpn.port.kiss import kiss_port_factory
+from tarpn.datalink import L2FIFOQueue
+from tarpn.datalink.ax25_l2 import AX25Protocol, DefaultLinkMultiplexer
+from tarpn.datalink.protocol import L2IOLoop
+from tarpn.io.kiss import KISSProtocol
+from tarpn.io.serial import SerialDevice
+from tarpn.network import L3Protocols, L3PriorityQueue
+from tarpn.network.mesh.protocol import MeshProtocol
+from tarpn.network.mesh import MeshAddress
+from tarpn.network.netrom_l3 import NetRomL3
+from tarpn.network.nolayer3 import NoLayer3Protocol
+from tarpn.scheduler import Scheduler
 from tarpn.settings import Settings
-
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('%(levelname)-8s %(asctime)s -- %(message)s'))
+from tarpn.transport.mesh_l4 import DatagramProtocol, MeshTransportAddress
+from tarpn.transport.netrom_l4 import NetRomTransportProtocol
+from tarpn.transport.unix import UnixServerThread
+from tarpn.util import WallTime
 
 logger = logging.getLogger("root")
-logger.setLevel(logging.INFO)
-logger.addHandler(handler)
-
-
-class EchoProtocol(Protocol):
-    def __init__(self):
-        self.transport: Optional[Transport] = None
-
-    def data_received(self, data: bytes) -> None:
-        logger.info(f"Data received: {data}")
-        if self.transport:
-            self.transport.write(data)
-
-    def connection_made(self, transport: Transport) -> None:
-        peer = transport.get_extra_info("peername")
-        logger.info(f"Connection made to {peer}")
-        self.transport = transport
-
-    def connection_lost(self, exc: Optional[Exception]) -> None:
-        peer = self.transport.get_extra_info("peername")
-        logger.info(f"Connection lost to {peer}")
-        self.transport = None
-
-
-async def main_async():
-    parser = argparse.ArgumentParser(description='Decode packets from a serial port')
-    parser.add_argument("config", help="Config file")
-    parser.add_argument("--debug", action="store_true")
-
-    args = parser.parse_args()
-
-    s = Settings(".", args.config)
-    node_settings = s.node_config()
-
-    # Create the main event loop
-    loop = asyncio.get_event_loop()
-
-    dlms = []
-    for port_config in s.port_configs():
-        in_queue: asyncio.Queue = asyncio.Queue()
-        out_queue: asyncio.Queue = asyncio.Queue()
-        asyncio.create_task(kiss_port_factory(in_queue, out_queue, port_config))
-
-        # Wire the port with an AX25 layer
-        dlm = DataLinkManager(AX25Call.parse(node_settings.node_call()), port_config.port_id(),
-                              in_queue, out_queue, loop.create_future)
-        dlms.append(dlm)
-
-    # Wire up Layer 3 and default L2 app
-    nl = NetworkManager(s.network_configs(), loop)
-    for dlm in dlms:
-        nl.attach_data_link(dlm)
-        dlm.add_l3_handler(IdHandler())
-
-    # Bind apps to netrom and start running the app servers
-    for app_config in s.app_configs():
-        # This multiplexer bridges the unix socket server and the network connections
-        multiplexer = TransportMultiplexer()
-
-        # We have a single unix socket connection
-        unix_factory = partial(NetromAppProtocol, app_config.app_name(), AX25Call.parse(app_config.app_call()),
-                               app_config.app_alias(), nl, multiplexer)
-        logger.info(f"Creating unix socket server for {app_config.app_call()} at {app_config.app_socket()}")
-        await loop.create_unix_server(unix_factory, app_config.app_socket(), start_serving=True)
-
-        # And many network connections
-        network_factory = partial(MultiplexingProtocol, multiplexer)
-        nl.bind_server(AX25Call.parse(app_config.app_call()), app_config.app_alias(), network_factory)
-
-    node_app_factory = partial(CommandProcessorProtocol, s, dlms, nl)
-    for dlm in dlms:
-        # TODO add a bind_server thing here too?
-        dlm.add_l3_handler(DataLinkAdapter(dlm, node_app_factory))
-
-    node_call = s.network_configs().node_call()
-    node_alias = s.network_configs().node_alias()
-
-    # Make a default application for L4
-    nl.bind_server(AX25Call.parse(node_call), node_alias, node_app_factory)
-
-    if node_settings.admin_enabled():
-        await loop.create_server(protocol_factory=node_app_factory,
-                                 host=node_settings.admin_listen(),
-                                 port=node_settings.admin_port(),
-                                 start_serving=True)
-
-    # Configure logging
-    logging.config.fileConfig("config/logging.ini", disable_existing_loggers=False)
-
-    event_logger = logging.getLogger("events")
-    event_logger.setLevel(logging.INFO)
-    event_logger.addHandler(handler)
-
-    # Start processing packets
-    tasks = [dlm.start() for dlm in dlms]
-    tasks.append(nl.start())
-    logger.info("Packet engine started")
-    await asyncio.wait(tasks)
 
 
 def main():
-    asyncio.run(main_async(), debug=True)
+    parser = argparse.ArgumentParser(description='Decode packets from a serial port')
+    parser.add_argument("config", nargs="?", default="config/node.ini", help="Config file")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("--profile", action="store_true", help="Attache a profiler to the process")
+    args = parser.parse_args()
+    if args.profile:
+        import cProfile
+        with cProfile.Profile() as pr:
+            run_node(args)
+        pr.print_stats(sort="tottime")
+        pr.dump_stats(file="main2.prof")
+    else:
+        run_node(args)
 
 
-# Just for testing
+def run_node(args):
+    # Load settings from ini file
+    s = Settings(".", args.config)
+    node_settings = s.node_config()
+    node_call = AX25Call.parse(node_settings.node_call())
+    if node_call.callsign == "N0CALL":
+        print("Callsign is missing from config. Please see instructions here "
+              "https://github.com/tarpn/tarpn-node-controller")
+        sys.exit(1)
+
+    # Setup logging
+    logging_config_file = node_settings.get("log.config", "not_set")
+    if logging_config_file != "not_set":
+        log_dir = node_settings.get("log.dir")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        logging.config.fileConfig(
+            logging_config_file, defaults={"log.dir": log_dir}, disable_existing_loggers=False)
+
+    if args.verbose:
+        logging.getLogger("root").setLevel(logging.DEBUG)
+
+    # Create thread pool
+    scheduler = Scheduler()
+
+    # Initialize I/O devices and L2 protocols
+    l3_protocols = L3Protocols()
+    l2_multi = DefaultLinkMultiplexer(L3PriorityQueue, scheduler)
+
+    for port_config in s.port_configs():
+        l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
+        l2 = AX25Protocol(port_config.port_id(), node_call, scheduler,
+                          l2_queueing, l2_multi, l3_protocols)
+
+        kiss = KISSProtocol(port_config.port_id(), l2_queueing, port_config.get_boolean("kiss.checksum", False))
+        SerialDevice(kiss, port_config.get("serial.device"), port_config.get_int("serial.speed"), scheduler)
+        scheduler.submit(L2IOLoop(l2_queueing, l2))
+
+    # Register L3 protocols
+    routing_table = tarpn.netrom.router.NetRomRoutingTable.load(
+        f"nodes-{node_settings.node_call()}.json", node_settings.node_alias())
+    # netrom_l3 = NetRomL3(node_call, node_settings.node_alias(),
+    #                      scheduler, l2_multi, routing_table)
+
+    mesh_address = MeshAddress.parse(s.network_configs().get("mesh.address"))
+    mesh_l3 = MeshProtocol(WallTime(), mesh_address, l2_multi, scheduler)
+    # l3_protocols.register(netrom_l3)
+    l3_protocols.register(NoLayer3Protocol())
+    l3_protocols.register(mesh_l3)
+
+    # Create the L4 protocols
+    # netrom_l4 = NetRomTransportProtocol(s.network_configs(), netrom_l3, scheduler)
+    mesh_l4 = DatagramProtocol(mesh_l3)
+
+    # Bind the command processor
+    # ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), l2s=l2_multi, l3=netrom_l3,
+    #                       l4=netrom_l4, scheduler=scheduler)
+    # netrom_l4.bind_server(node_call, node_settings.node_alias(), ncp_factory)
+
+    # Set up applications
+    for app_config in s.app_configs():
+        # We have a single unix socket connection multiplexed to many network connections
+        app_multiplexer = TransportMultiplexer()
+        app_protocol = ApplicationProtocol(app_config.app_name(),
+                                           app_config.app_alias(), mesh_l4, app_multiplexer)
+        scheduler.submit(UnixServerThread(app_config.app_socket(), app_protocol))
+        app_address = MeshTransportAddress.parse(app_config.get("app.address"))
+        multiplexer_protocol = partial(MultiplexingProtocol, app_multiplexer)
+        mesh_l4.bind(multiplexer_protocol, app_address.address, app_address.port)
+
+    # Start a metrics reporter
+    reporter = ConsoleReporter(reporting_interval=300)
+    scheduler.timer(10_000, reporter.start, True)
+    scheduler.add_shutdown_hook(reporter.stop)
+
+    logger.info("Finished Startup")
+    try:
+        # Wait for all threads
+        scheduler.join()
+    except KeyboardInterrupt:
+        scheduler.shutdown()
+
+
 if __name__ == "__main__":
     main()
