@@ -86,7 +86,7 @@ Run the core packet engine
 In a separate shell, run the demo app. 
 
 ```sh
-./tarpn-app demo
+./bin/tarpn-app demo
 ```
 
 This app is a simple terminal chat program that lets you easily test out
