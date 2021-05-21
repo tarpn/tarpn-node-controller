@@ -147,6 +147,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
     WindowSize = 1024
     MaxFragments = 8
     HeaderBytes = 10
+    DefaultTTL = 7
     BroadcastAddress = MeshAddress(0xFFFF)
 
     def __init__(self,
@@ -263,6 +264,11 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         self.announce_timer.reset()
 
     def send_datagram(self, destination: MeshAddress, datagram_header: DatagramHeader, data: bytes):
+        if 0xFFE0 <= destination.id < 0xFFFF:
+            ttl = destination.id & 0x1F
+        else:
+            ttl = MeshProtocol.DefaultTTL
+
         if len(data) + DatagramHeader.size() > self._max_fragment_size():
             stream = BytesIO()
             datagram_header.encode(stream)
@@ -286,7 +292,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
                     version=0,
                     qos=QoS.Default,
                     protocol=Protocol.FRAGMENT,
-                    ttl=7,
+                    ttl=ttl,
                     identity=(self.send_seq % MeshProtocol.WindowSize),
                     length=len(fragment),
                     source=self.our_address,
@@ -301,7 +307,7 @@ class MeshProtocol(L3Protocol, LoggingMixin):
                 version=0,
                 qos=QoS.Default,
                 protocol=Protocol.DATAGRAM,
-                ttl=7,
+                ttl=ttl,
                 identity=(self.send_seq % MeshProtocol.WindowSize),
                 length=len(data),
                 source=self.our_address,

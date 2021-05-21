@@ -12,14 +12,14 @@ Pure Python implementation of a TNC (Terminal Node Controller).
 
 On Linux (including Raspbian) install Python 3.7, pip, and virtualenv
 
-```
+```shell
 sudo apt-get install python3.7 python3-pip
 pip3 install virtualenv
 ```
 
 On Mac OS:
 
-```
+```shell
 brew install python3
 pip3 install virtualenv
 ```
@@ -28,7 +28,7 @@ pip3 install virtualenv
 
 Create a Python environment with Python 3.7+ and enter it
 
-```sh
+```shell
 python3 -m virtualenv ~/tarpn-env; cd ~/tarpn-env
 ```
 
@@ -42,38 +42,37 @@ Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
 
 ## Configuration
 
-Edit the included config file `config/node.ini`. At a minimum, set `mycall` and `node.locator`. 
-The `mesh.address` must be coordinated within your network to be unique. Below is the included config file
+A sample config file is included at `config/node.ini.sample`. Copy it to `config/node.ini` upon startup.
 
+```shell
+cp config/node.ini.sample config/node.ini
+```
+
+Edit this file and, at a minimum, set `mycall`, `node.alias`, and `node.locator`.
+
+One or more ports should also be configured. An example `[port:1]` is included.
+
+The `mesh.address` must be coordinated within your network to be unique.
+
+node.ini.sample:
 ```ini
 [default]
-mycall = N0CALL
+mycall = N0CALL         ; Your callsign
 
 [node]
-log.dir = logs
-log.config = config/logging.ini
-
-node.call = ${mycall}-1
-node.alias = NODE1
-node.locator = FM06rb
+node.alias = MyNode     ; A name for your node
+node.locator = FM05     ; Your maidenhead locator
 
 [port:1]
 port.enabled = False
 port.type = serial
 port.framing = kiss
 kiss.checksum = false
-serial.device = /tmp/vmodem_A0
-serial.speed = 9600
+serial.device = /dev/ttyUSB0
+serial.speed = 57600
 
 [network]
 mesh.address = 00.aa
-mesh.ttl = 7
-
-[app:demo]
-app.address = mesh://ff.ff:100
-app.call = ${mycall}-2
-app.alias = DEMO
-app.sock = /tmp/tarpn-demo.sock
 ```
 
 # Usage
@@ -87,8 +86,9 @@ Run the core packet engine
 In a separate shell, run the demo app. 
 
 ```sh
-./tarpn-app plugins.demo DemoApp /tmp/tarpn-demo.sock
+./tarpn-app demo
 ```
+
 This app is a simple terminal chat program that lets you easily test out
 the network with other participants.
 

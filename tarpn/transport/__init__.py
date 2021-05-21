@@ -5,7 +5,8 @@ from tarpn.network import L3Address
 
 
 class L4Address:
-    pass
+    def network_address(self) -> L3Address:
+        raise NotImplementedError
 
 
 class L4Protocol:

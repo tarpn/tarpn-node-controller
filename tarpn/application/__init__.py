@@ -1,15 +1,23 @@
 import dataclasses
 import logging
 import queue
+from dataclasses import dataclass
 from typing import Optional, Dict
 
 import msgpack
 
-from tarpn.app import AppPayload
 from tarpn.log import LoggingMixin
 from tarpn.transport import Transport, Protocol, L4Protocol, L4Address
 from tarpn.transport import DatagramProtocol as DProtocol
 from tarpn.transport import DatagramTransport as DTransport
+
+
+@dataclass
+class AppPayload:
+    version: int
+    type: int
+    address: str
+    buffer: bytes
 
 
 class TransportMultiplexer(LoggingMixin):
@@ -39,7 +47,7 @@ class MultiplexingProtocol(DProtocol):
         Handle incoming network data
         """
         if self.network_transport:
-            payload = AppPayload(0, 1, str(address), data)
+            payload = AppPayload(0, 1, str(address.network_address()), data)
             msg = msgpack.packb(dataclasses.asdict(payload))
             self.multiplexer.write_to_socket(msg)
         else:
@@ -79,12 +87,17 @@ class ApplicationProtocol(Protocol, LoggingMixin):
     messages to the applications over the transport (unix domain socket, or possibly tcp socket)
     """
 
-    def __init__(self, app_name: str, app_alias: str,
-                 transport_manager: L4Protocol, multiplexer: TransportMultiplexer):
+    def __init__(self,
+                 app_name: str,
+                 app_alias: str,
+                 app_bind_address: str,
+                 transport_manager: L4Protocol,
+                 multiplexer: TransportMultiplexer):
         Protocol.__init__(self)
         LoggingMixin.__init__(self)
         self.app_name = app_name
         self.app_alias = app_alias
+        self.app_bind_address = app_bind_address
         self.transport_manager = transport_manager
         self.multiplexer = multiplexer
         self.unpacker = msgpack.Unpacker()
@@ -107,7 +120,11 @@ class ApplicationProtocol(Protocol, LoggingMixin):
                 if self.multiplexer.network_transports.get(payload.address):
                     self.multiplexer.network_transports.get(payload.address).write_to(payload.address, info)
                 else:
-                    self.warning(f"No transport open for {payload.address}")
+                    transport = self.multiplexer.network_transports.get(self.app_bind_address)
+                    if transport is not None:
+                        transport.write_to(payload.address, info)
+                    else:
+                        self.warning(f"No transport available for {payload.address}")
             elif payload.type == 0x02:  # Connect
                 pass
                 # TODO how to initiate connections here?

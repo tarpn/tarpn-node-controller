@@ -1,0 +1,17 @@
+[default]
+mycall = N0CALL         ; Your callsign
+
+[node]
+node.alias = MyNode     ; A name for your node
+node.locator = FM05     ; Your maidenhead locator
+
+[port:1]
+port.enabled = False
+port.type = serial
+port.framing = kiss
+kiss.checksum = false
+serial.device = /dev/ttyUSB0
+serial.speed = 57600
+
+[network]
+mesh.address = 00.aa

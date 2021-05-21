@@ -29,14 +29,7 @@ def _update_crc(crc, c):
     return crc
 
 
-def crc(s: str):
-    crc = PRESET
-    for c in str:
-        crc = _update_crc(crc, ord(c))
-    return crc
-
-
-def crcb(b: bytes):
+def crc_b(b: bytes):
     crc = PRESET
     for c in b:
         crc = _update_crc(crc, c)

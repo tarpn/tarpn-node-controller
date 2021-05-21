@@ -19,6 +19,9 @@ class NetRomCircuitAddress(L4Address):
     ssid: int
     circuit: int
 
+    def network_address(self) -> NetRomAddress:
+        return NetRomAddress(callsign=self.callsign, ssid=self.ssid)
+
     def __str__(self):
         return f"netrom://{self.callsign}-{self.ssid}:{self.circuit}"
 

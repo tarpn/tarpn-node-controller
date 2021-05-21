@@ -2,6 +2,7 @@ import argparse
 import logging
 import logging.config
 import os
+import shutil
 import sys
 from functools import partial
 from typing import Dict
@@ -49,14 +50,20 @@ def main():
 
 
 def run_node(args):
+    # Bootstrap node.ini
+    if not os.path.exists(args.config) and os.path.basename(args.config) == "node.ini":
+        shutil.copyfile("config/node.ini.sample", args.config)
+
     # Load settings from ini file
-    s = Settings(".", args.config)
+    s = Settings(".", ["config/defaults.ini", args.config])
     node_settings = s.node_config()
     node_call = AX25Call.parse(node_settings.node_call())
     if node_call.callsign == "N0CALL":
         print("Callsign is missing from config. Please see instructions here "
               "https://github.com/tarpn/tarpn-node-controller")
         sys.exit(1)
+    else:
+        print(f"Loaded configuration for {node_call}")
 
     # Setup logging
     logging_config_file = node_settings.get("log.config", "not_set")
@@ -111,10 +118,14 @@ def run_node(args):
     for app_config in s.app_configs():
         # We have a single unix socket connection multiplexed to many network connections
         app_multiplexer = TransportMultiplexer()
-        app_protocol = ApplicationProtocol(app_config.app_name(),
-                                           app_config.app_alias(), mesh_l4, app_multiplexer)
-        scheduler.submit(UnixServerThread(app_config.app_socket(), app_protocol))
         app_address = MeshTransportAddress.parse(app_config.get("app.address"))
+        app_protocol = ApplicationProtocol(
+            app_config.app_name(),
+            app_config.app_alias(),
+            str(app_address.address),
+            mesh_l4,
+            app_multiplexer)
+        scheduler.submit(UnixServerThread(app_config.app_socket(), app_protocol))
         multiplexer_protocol = partial(MultiplexingProtocol, app_multiplexer)
         mesh_l4.bind(multiplexer_protocol, app_address.address, app_address.port)
 

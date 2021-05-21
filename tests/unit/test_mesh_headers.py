@@ -1,7 +1,7 @@
 import unittest
 from io import BytesIO
 
-from tarpn.crc import crcb
+from tarpn.crc import crc_b
 from tarpn.network import QoS
 from tarpn.network.mesh.header import PacketHeader, Protocol, MeshAddress, DatagramHeader, \
     FragmentHeader, Flags
@@ -64,7 +64,7 @@ class TestMeshHeaders(unittest.TestCase):
             source=100,
             destination=100,
             length=len(msg),
-            checksum=crcb(msg))
+            checksum=crc_b(msg))
 
         header1 = PacketHeader(
             version=0,
@@ -89,7 +89,7 @@ class TestMeshHeaders(unittest.TestCase):
             source=100,
             destination=100,
             length=len(msg),
-            checksum=crcb(msg))
+            checksum=crc_b(msg))
 
         fragment1 = FragmentHeader(Protocol.DATAGRAM, Flags.NONE, 0, 99)
 

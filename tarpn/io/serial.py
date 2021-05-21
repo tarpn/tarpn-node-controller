@@ -40,7 +40,7 @@ class SerialReadLoop(SerialLoop, LoggingMixin):
             try:
                 data = self.ser.read(1024)
                 if len(data) > 0:
-                    self.debug(f"Read {data}")
+                    self.debug(f"Read {len(data)} bytes: {data}")
                     self.protocol.handle_bytes(data)
             except serial.SerialException:
                 self.exception("Failed to read bytes from serial device")
@@ -65,7 +65,7 @@ class SerialWriteLoop(SerialLoop, LoggingMixin):
             if to_write is not None and len(to_write) > 0:
                 try:
                     self.ser.write(to_write)
-                    self.debug(f"Wrote {to_write}")
+                    self.debug(f"Wrote {len(to_write)} bytes: {to_write}")
                     self.retry_backoff.reset()
                 except serial.SerialTimeoutException:
                     self.unsent.append(to_write)

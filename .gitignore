@@ -1,10 +1,8 @@
 venv
-
 *.egg-info
 .eggs
-
 __pycache__
-
 dist
-
 build
+NOTES.md
+config/node.ini

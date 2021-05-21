@@ -257,6 +257,9 @@ class MutableVectorClock(VectorClock):
     def __setitem__(self, key, value):
         self._timestamps[key] = value
 
+    def __copy__(self):
+        return MutableVectorClock(*self._timestamps)
+
     def inc_timestamp(self, idx):
         self[idx] += 1
         return self

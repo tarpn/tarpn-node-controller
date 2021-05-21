@@ -89,13 +89,15 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
             ax25_packet = decode_ax25_packet(frame.data)
             self.maybe_open_link(AX25Address.from_ax25_call(ax25_packet.source))
             if ax25_packet.dest == AX25Call("NODES"):
-                packet_logger.info(f"[Port={self.link_port}] RX: {ax25_packet}")
-                # Eagerly connect to neighbors sending NODES
-                if self.state_machine.get_state(ax25_packet.source) in (AX25StateType.Disconnected,
-                                                                        AX25StateType.AwaitingRelease):
-                    self.dl_connect_request(copy(ax25_packet.source))
+                packet_logger.debug(f"[Port={self.link_port}] RX {len(ax25_packet.buffer)}: {ax25_packet}")
             else:
-                packet_logger.debug(f"[Port={self.link_port}] RX: {ax25_packet}")
+                packet_logger.info(f"[Port={self.link_port}] RX {len(ax25_packet.buffer)}: {ax25_packet}")
+
+                # TODO remove this probably
+                # Eagerly connect to neighbors sending NODES
+                # if self.state_machine.get_state(ax25_packet.source) in (AX25StateType.Disconnected,
+                #                                                         AX25StateType.AwaitingRelease):
+                #     self.dl_connect_request(copy(ax25_packet.source))
         except Exception:
             self.exception(f"Had error parsing packet: {frame}")
             return
@@ -167,9 +169,9 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def write_packet(self, packet: AX25Packet):
         frame = FrameData(self.link_port, packet.buffer)
         if packet.dest == AX25Call("NODES"):
-            packet_logger.debug(f"[Port={self.link_port}] TX: {packet}")
+            packet_logger.debug(f"[Port={self.link_port}] TX {len(packet.buffer)}: {packet}")
         else:
-            packet_logger.info(f"[Port={self.link_port}] TX: {packet}")
+            packet_logger.info(f"[Port={self.link_port}] TX {len(packet.buffer)}: {packet}")
         if not self.queue.offer_outbound(frame):
             self.warning("Could not send frame, buffer full")
 

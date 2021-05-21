@@ -2,7 +2,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Tuple, Dict, Any, Callable, Optional
 
-from tarpn.crc import crcb
+from tarpn.crc import crc_b
 from tarpn.log import LoggingMixin
 from tarpn.network import L3Protocol, L3Address
 from tarpn.network.mesh import MeshAddress
@@ -16,6 +16,9 @@ from tarpn.transport import DatagramTransport as DTransport
 class MeshTransportAddress(L4Address):
     address: MeshAddress
     port: int
+
+    def network_address(self) -> MeshAddress:
+        return self.address
 
     def __repr__(self):
         return f"mesh://{self.address}:{self.port}"
@@ -72,7 +75,7 @@ class DatagramTransport(DTransport):
                     source=self.port,
                     destination=self.port,
                     length=len(encoded_data),
-                    checksum=crcb(encoded_data)
+                    checksum=crc_b(encoded_data)
                 )
                 # TODO generalize this method in L3Protocol
                 dest = MeshAddress.parse(address)

@@ -2,7 +2,7 @@ import configparser
 import re
 import sys
 import os
-from typing import Optional, Dict
+from typing import Optional, Mapping, Iterator, Any, List, Dict
 
 _default_settings = {
     "node": {
@@ -42,9 +42,9 @@ def _default_basedir(app_name):
 
 
 class Settings:
-    def __init__(self, basedir=None, path="config.ini", defaults=None):
+    def __init__(self, basedir: str = None, paths: List[str] = None, defaults: Dict = None):
         self._init_basedir(basedir)
-        self._configfile = os.path.join(self._basedir, path)
+        self._configfiles = [os.path.join(self._basedir, path) for path in paths]
         self._config: Optional[configparser.ConfigParser] = None
         if defaults is None:
             self._defaults = dict()
@@ -68,9 +68,15 @@ class Settings:
 
     def load(self):
         self._config = configparser.ConfigParser(defaults=self._defaults,
-                                                 interpolation=configparser.ExtendedInterpolation())
+                                                 interpolation=configparser.ExtendedInterpolation(),
+                                                 inline_comment_prefixes=";",
+                                                 default_section="default")
         self._config.read_dict(_default_settings)
-        self._config.read(self._configfile)
+        for path in self._configfiles:
+            if os.path.exists(path):
+                self._config.read(path)
+            else:
+                raise RuntimeError(f"No such config file {path}")
 
     def save(self):
         # self._config.write()
@@ -106,14 +112,29 @@ class Settings:
             app_configs.append(AppConfig.from_dict(app, app_sect))
         return app_configs
 
+    def config_section(self, name):
+        return Config(name, self._config[name])
 
-class Config:
+
+class Config(Mapping):
     def __init__(self, section_name, config_section):
         self._section = section_name
         self._config_section = config_section
 
+    def __getitem__(self, k) -> Any:
+        return self._config_section[k]
+
+    def __len__(self) -> int:
+        return len(self._config_section)
+
+    def __iter__(self) -> Iterator:
+        return iter(self._config_section)
+
     def __repr__(self) -> str:
         return f"{self._section}: {dict(self._config_section)}"
+
+    def as_dict(self) -> dict:
+        return dict(self._config_section)
 
     def get(self, key, default: str = None):
         value = self._config_section.get(key)
