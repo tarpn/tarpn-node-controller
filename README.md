@@ -37,7 +37,7 @@ _All further steps in this section assume you are in the ~/tarpn-env directory_
 Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
 
 ```sh
-./bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.1/tarpn_core-0.1.1-py3-none-any.whl
+./bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.2/tarpn_core-0.1.2-py3-none-any.whl
 ```
 
 ## Configuration
