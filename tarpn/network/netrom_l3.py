@@ -171,3 +171,5 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                 packet_logger.debug(f"TX: {payload}")
                 self.link_multiplexer.offer(payload)
 
+    def mtu(self) -> int:
+        return self.link_multiplexer.mtu() - 22

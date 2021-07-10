@@ -5,16 +5,17 @@ from functools import partial
 import serial_asyncio
 
 from tarpn.ax25 import decode_ax25_packet
+from tarpn.datalink import FrameData
 from tarpn.port.kiss import KISSProtocol
 from tarpn.settings import PortConfig
 
 
 async def printer(inbound):
     while True:
-        frame = await inbound.get()
+        frame: FrameData = await inbound.get()
         if frame is not None:
             try:
-                packet = decode_ax25_packet(frame.buffer)
+                packet = decode_ax25_packet(frame.data)
                 print(packet)
             finally:
                 inbound.task_done()

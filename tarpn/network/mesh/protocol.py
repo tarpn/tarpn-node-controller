@@ -1,146 +1,44 @@
 import dataclasses
-import logging
-import operator
-from collections import defaultdict
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
+from functools import partial
 from io import BytesIO
-from typing import Tuple, List, Dict, Optional, Set, cast
+from typing import Tuple, List, Dict, Optional, Set
 
 from tarpn.datalink import L2Payload
 from tarpn.datalink.ax25_l2 import AX25Address
 from tarpn.datalink.protocol import LinkMultiplexer
 from tarpn.log import LoggingMixin
 from tarpn.network import L3Protocol, L3Address, L3Payload, QoS
-from tarpn.network.mesh.header import Fragment, PDU, Datagram, DatagramHeader, \
-    Protocol, Raw, PacketHeader, Announce, FragmentHeader, Header, Flags
 from tarpn.network.mesh import MeshAddress
+from tarpn.network.mesh.header import Protocol, NetworkHeader, Header, DiscoveryHeader
 from tarpn.scheduler import Scheduler
-from tarpn.transport import L4Protocol
-from tarpn.util import Time, chunks
+from tarpn.transport.mesh import L4Handlers
+from tarpn.util import Time, TTLCache
 
 
-class FragmentAssembler:
-    # TODO expire fragments after some time
-    # TODO support more L4 protocols here
-    def __init__(self):
-        # A buffer of undelivered fragment. Structured like source -> sequence -> fragments
-        self.buffer: Dict[MeshAddress, Dict[int, List[Fragment]]] = defaultdict(lambda: defaultdict(list))
-
-    def feed(self, incoming: Fragment) -> Optional[PDU]:
-        source = incoming.network_header.source
-        dest = incoming.network_header.destination
-        protocol = incoming.fragment_header.protocol
-
-        # The sequence minus fragment is same for all fragments in a given PDU
-        base_seq = (MeshProtocol.WindowSize + incoming.fragment_header.sequence -
-                    incoming.fragment_header.fragment) % MeshProtocol.WindowSize
-
-        # Buffer the incoming frame and see if it completes a whole segment
-        self.buffer[source][base_seq].append(incoming)
-
-        fragments = self.buffer[source][base_seq]
-        sorted_fragments = sorted(fragments, key=operator.attrgetter("fragment_header.fragment"))
-        has_more = sorted_fragments[-1].fragment_header.flags & Flags.FRAGMENT
-        have_all = len(fragments) == sorted_fragments[-1].fragment_header.fragment + 1
-        if not has_more and have_all:
-            del self.buffer[source][base_seq]
-            joined = BytesIO()
-            for fragment in sorted_fragments:
-                if fragment.network_header.source == source and \
-                        fragment.network_header.destination == dest and \
-                        fragment.fragment_header.protocol == protocol:
-                    joined.write(fragment.payload)
-                else:
-                    # Fragment consistency error
-                    raise RuntimeError("Fragment consistency error, header fields do not match")
-            # Parse payload
-            if protocol == Protocol.DATAGRAM:
-                joined.seek(0)
-                datagram_header = DatagramHeader.decode(joined)
-                payload = joined.read()
-                return Datagram(incoming.network_header, datagram_header, payload)
-            else:
-                joined.seek(0)
-                payload = joined.read()
-                return Raw(incoming.network_header, payload)
-        else:
-            return None
-
-
-class PacketCodec:
-    # TODO make this pluggable for other L3 and L4 protocols
-    def __init__(self):
-        self.assembler = FragmentAssembler()
-
-    def decode_header(self, stream: BytesIO) -> PacketHeader:
-        return PacketHeader.decode(stream)
-
-    def decode_packet(self, header: PacketHeader, stream: BytesIO) -> Optional[PDU]:
-        if header.protocol == Protocol.ANNOUNCE:
-            return Announce(header, stream.read())
-        elif header.protocol == Protocol.FRAGMENT:
-            fragment_header = FragmentHeader.decode(stream)
-            fragment = Fragment(header, fragment_header, stream.read())
-            return self.assembler.feed(fragment)
-        elif header.protocol == Protocol.DATAGRAM:
-            datagram_header = DatagramHeader.decode(stream)
-            payload = stream.read()
-            return Datagram(header, datagram_header, payload)
-        else:
-            payload = stream.read()
-            return Raw(header, payload)
-
-    def encode_packet(self, header: PacketHeader, next_header: Optional[Header], payload: bytes) -> bytes:
-        stream = BytesIO()
+def encode_packet(network_header: NetworkHeader, additional_headers: List[Header], payload: bytes) -> bytes:
+    stream = BytesIO()
+    network_header.encode(stream)
+    for header in additional_headers:
         header.encode(stream)
-        if next_header is not None:
-            next_header.encode(stream)
-        stream.write(payload)
-        stream.seek(0)
-        return stream.read()
+    stream.write(payload)
+    stream.seek(0)
+    return stream.read()
 
 
-class TTLCache:
-    def __init__(self, time: Time, expiry_ms: int):
-        self.time = time
-        self.expiry_ms = expiry_ms
-        self.cache: Set[int] = set()
-        self.seen: List[Tuple[int, int]] = list()
-
-    def contains(self, header: PacketHeader) -> bool:
-        header_hash = hash(header)
-        """Check if a packet header has been seen before"""
-        now = self.time.time()
-        removed = []
-        for i, (expire, item) in zip(range(len(self.seen)), self.seen):
-            if now > expire:
-                removed.append(i)
-                self.cache.remove(item)
-        for i in removed[::-1]:
-            del self.seen[i]
-
-        if header_hash in self.cache:
-            return True
-        else:
-            self.cache.add(header_hash)
-            self.seen.append((now + self.expiry_ms, header_hash))
-            return False
+def encode_partial_packet(headers: List[Header], payload: bytes) -> bytes:
+    stream = BytesIO()
+    for header in headers:
+        header.encode(stream)
+    stream.write(payload)
+    stream.seek(0)
+    return stream.read()
 
 
 class MeshProtocol(L3Protocol, LoggingMixin):
     """
-    A simple network protocol for partially connected meshes.
-
-    When receiving a packet, check if it is the next expected packet from the sender. If not,
-    buffer it until we see the next expected packet. The first time we see a packet, retransmit
-    it with the FLOOD flag set and TTL decreased by one.
-
-    When transmitting an original packet, attach our send sequence and then increment it. Set
-    the TTL to be at least the network width.
-
-    TODO need a way to request some packets to be resent if we buffer for too long
-    TODO need a way to recover from sequence errors
-    TODO just one port for datagram? like some streaming protocols
+    A simple protocol for a partially connected mesh network.
     """
 
     ProtocolId = 0xB0
@@ -154,176 +52,179 @@ class MeshProtocol(L3Protocol, LoggingMixin):
                  time: Time,
                  our_address: MeshAddress,
                  link_multiplexer: LinkMultiplexer,
+                 l4_handlers: L4Handlers,
                  scheduler: Scheduler):
         LoggingMixin.__init__(self, extra_func=self.log_ident)
         self.time = time
         self.link_multiplexer = link_multiplexer
         self.our_address = our_address
-        self.announce_timer = scheduler.timer(60000.0, self.announce_self, auto_start=False)
+        self.l4_handlers = l4_handlers
 
         # TTL cache of seen frames from each source
         self.header_cache: TTLCache = TTLCache(time, 30_000)
 
-        # Packet re-assembler
-        self.assembler = FragmentAssembler()
-        self.parser = PacketCodec()
-
         # Our own send sequence
         self.send_seq: int = 1
+        self.seq_lock = threading.Lock()
 
-        self.neighbors: Dict[MeshAddress, datetime] = dict()
-        self.datagram_manager: Optional = None
-        self.announce_timer.start()
+        # Mapping of neighbor address to last heard time and heard-on port
+        self.neighbors_last_heard: Dict[MeshAddress, datetime] = dict()
+        self.neighbors_heard_on: Dict[MeshAddress, int] = dict()
+        self.discovery_timer = scheduler.timer(120_000, partial(self.send_discovery, None), auto_start=False)
+
+        scheduler.timer(1_000, partial(self.send_discovery, None), auto_start=True)
+
+    def __repr__(self):
+        return f"<MeshProtocol {self.our_address}>"
 
     def log_ident(self) -> str:
         return f"[MeshProtocol {self.our_address}]"
+
+    def next_sequence(self) -> int:
+        with self.seq_lock:
+            seq = self.send_seq
+            self.send_seq += 1
+        return seq % MeshProtocol.WindowSize
+
+    def next_sequences(self, n) -> List[int]:
+        seqs = []
+        with self.seq_lock:
+            for i in range(n):
+                seqs.append(self.send_seq % MeshProtocol.WindowSize)
+            self.send_seq += n
+        return seqs
+
+    def neighbors(self, since=300) -> Set[MeshAddress]:
+        time_ago = datetime.utcnow() - timedelta(seconds=since)
+        return {neighbor for neighbor, last_heard in self.neighbors_last_heard.items() if last_heard > time_ago}
 
     def can_handle(self, protocol: int) -> bool:
         return protocol == MeshProtocol.ProtocolId
 
     def handle_l2_payload(self, payload: L2Payload):
         stream = BytesIO(payload.l3_data)
-        header = self.parser.decode_header(stream)
+        header = NetworkHeader.decode(stream)
 
-        if self.header_cache.contains(header):
+        # Handle L3 protocols first
+        if header.protocol == Protocol.DISCOVER:
+            self.handle_discovery(payload.link_id, header, DiscoveryHeader.decode(stream))
             return
 
-        self.debug(f"Incoming packet {header}")
-
-        if header.destination == self.our_address:
-            self.deliver_local(header, stream)
+        # Now decide if we should handle or drop
+        if self.header_cache.contains(hash(header)):
             return
 
-        if header.destination == self.BroadcastAddress:
-            # handle it locally and forward
-            self.deliver_local(header, stream)
+        self.debug(f"Handling {header}")
+
+        # If the packet is addressed to us, handle it
+        if header.destination in (self.our_address, self.BroadcastAddress):
+            self.l4_handlers.handle_l4(header, header.protocol, stream)
 
         if header.ttl > 1:
-            # Decrease the TTL, clear the origin flag
+            # Decrease the TTL
             header_copy = dataclasses.replace(header, ttl=header.ttl - 1)
             stream.seek(0)
             header_copy.encode(stream)
             stream.seek(0)
-            self.broadcast(header_copy, stream.read(), exclude_link_id=payload.link_id)
+            self.send(header_copy, stream.read(), exclude_link_id=payload.link_id)
+        else:
+            self.debug(f"Not forwarding {header} due to TTL")
 
-    def deliver_local(self, header: PacketHeader, stream: BytesIO):
-        payload = self.parser.decode_packet(header, stream)
-        if payload is not None:
-            self.debug(f"Delivering {payload}")
-            if isinstance(payload, Datagram) and self.datagram_manager is not None:
-                self.datagram_manager.handle_datagram(payload)
-            elif isinstance(payload, Announce):
-                announce = cast(Announce, payload)
-                self.neighbors[announce.network_header.source] = self.time.datetime()
-            else:
-                self.warning(f"Tried to deliver payload {payload}, but there were no handlers")
+    def handle_discovery(self, link_id: int, network_header: NetworkHeader, discover: DiscoveryHeader):
+        """
+        Handling an inbound DISCOVER packet. This is used as a heartbeat and for neighbor discovery
+        """
+        self.debug(f"Handling {discover}")
+        if network_header.source not in self.neighbors_last_heard:
+            self.neighbors_last_heard[network_header.source] = datetime.utcnow()
+            self.neighbors_heard_on[network_header.source] = link_id
+            self.info(f"Found new neighbor {network_header.source}!")
+            self.send_discovery(link_id)
+        elif len(discover.neighbors) == 0:
+            self.neighbors_last_heard[network_header.source] = datetime.utcnow()
+            self.send_discovery(link_id)
+        else:
+            self.neighbors_last_heard[network_header.source] = datetime.utcnow()
 
-    def broadcast(self, header: PacketHeader, buffer: bytes, exclude_link_id: Optional[int] = None):
-        """Broadcast a packet to all available L2 links, optionally excluding the link
-        this packet was heard on.
+    def send_discovery(self, link: Optional[int] = None):
+        """
+        Send out a DISCOVER packet with our known neighbors
+        """
+        now = datetime.utcnow()
+        discovery = DiscoveryHeader([], [])
+        for neighbor, last_seen in self.neighbors_last_heard.items():
+            discovery.neighbors.append(neighbor)
+            discovery.last_seen_s.append((now - last_seen).seconds)
+
+        network_header = NetworkHeader(
+            version=0,
+            qos=QoS.Lower,
+            protocol=Protocol.DISCOVER,
+            ttl=1,
+            identity=self.next_sequence(),
+            length=0,
+            source=self.our_address,
+            destination=self.BroadcastAddress,
+        )
+
+        stream = BytesIO()
+        network_header.encode(stream)
+        discovery.encode(stream)
+        stream.seek(0)
+        buffer = stream.read()
+
+        if link is not None:
+            links = [link]
+        else:
+            links = self.link_multiplexer.links_for_address(AX25Address("TAPRN"))
+
+        for link_id in links:
+            payload = L3Payload(
+                source=network_header.source,
+                destination=network_header.destination,
+                protocol=MeshProtocol.ProtocolId,
+                buffer=buffer,
+                link_id=link_id,
+                qos=QoS.Lower,
+                reliable=False)
+            self.debug(f"Sending Discover {payload}")
+            self.link_multiplexer.offer(payload)
+        self.discovery_timer.reset()
+
+    def send(self, header: NetworkHeader, buffer: bytes, exclude_link_id: Optional[int] = None):
+        """
+        Send a packet to a network destination. If the destination address is ff.ff, the packet
+        is broadcast on all available L2 links (optionally excluding a given link).
 
         :param header the header of the packet to broadcast
         :param buffer the entire buffer of the packet to broadcast
         :param exclude_link_id an L2 link to exclude from the broadcast
         """
-        # Map protocol QoS to internal QoS
-        if header.qos == 2:
-            qos = QoS.Higher
-        elif header.qos == 3:
-            qos = QoS.Lower
-        else:
-            qos = QoS.Default
 
-        for link_id in self.link_multiplexer.links_for_address(AX25Address("TAPRN"), exclude_link_id):
+        if header.destination == MeshProtocol.BroadcastAddress or header.destination not in self.neighbors_heard_on:
+            links = self.link_multiplexer.links_for_address(AX25Address("TAPRN"), exclude_link_id)
+        else:
+            links = [self.neighbors_heard_on[header.destination]]
+
+        for link_id in links:
             payload = L3Payload(
                 source=header.source,
                 destination=header.destination,
                 protocol=MeshProtocol.ProtocolId,
                 buffer=buffer,
                 link_id=link_id,
-                qos=qos,
+                qos=QoS(header.qos),
                 reliable=False)
             self.debug(f"Forwarding {payload}")
             self.link_multiplexer.offer(payload)
 
-    def announce_self(self):
-        self.info("Sending announce")
-        network_header = PacketHeader(
-            version=0,
-            qos=QoS.Default,
-            protocol=Protocol.ANNOUNCE,
-            ttl=7,
-            identity=(self.send_seq % MeshProtocol.WindowSize),
-            length=0,
-            source=self.our_address,
-            destination=self.BroadcastAddress,
-        )
-        buffer = self.parser.encode_packet(network_header, None, b"Hello, World")
-        self.broadcast(network_header, buffer)
-        self.send_seq += 1
-        self.announce_timer.reset()
-
-    def send_datagram(self, destination: MeshAddress, datagram_header: DatagramHeader, data: bytes):
-        if 0xFFE0 <= destination.id < 0xFFFF:
-            ttl = destination.id & 0x1F
-        else:
-            ttl = MeshProtocol.DefaultTTL
-
-        if len(data) + DatagramHeader.size() > self._max_fragment_size():
-            stream = BytesIO()
-            datagram_header.encode(stream)
-            stream.write(data)
-            stream.seek(0)
-            fragment_idx = 0
-            fragment_size = self._max_fragment_size() - FragmentHeader.size()
-            fragments = list(chunks(stream.read(), fragment_size))
-            for i, fragment in zip(range(len(fragments)), fragments):
-                if i < len(fragments) - 1:
-                    flags = Flags.FRAGMENT
-                else:
-                    flags = Flags.NONE
-                fragment_header = FragmentHeader(
-                    protocol=Protocol.DATAGRAM,
-                    flags=flags,
-                    fragment=fragment_idx,
-                    sequence=(self.send_seq % MeshProtocol.WindowSize)
-                )
-                network_header = PacketHeader(
-                    version=0,
-                    qos=QoS.Default,
-                    protocol=Protocol.FRAGMENT,
-                    ttl=ttl,
-                    identity=(self.send_seq % MeshProtocol.WindowSize),
-                    length=len(fragment),
-                    source=self.our_address,
-                    destination=destination,
-                )
-                buffer = self.parser.encode_packet(network_header, fragment_header, fragment)
-                self.broadcast(network_header, buffer)
-                self.send_seq += 1
-                fragment_idx += 1
-        else:
-            network_header = PacketHeader(
-                version=0,
-                qos=QoS.Default,
-                protocol=Protocol.DATAGRAM,
-                ttl=ttl,
-                identity=(self.send_seq % MeshProtocol.WindowSize),
-                length=len(data),
-                source=self.our_address,
-                destination=destination,
-            )
-            buffer = self.parser.encode_packet(network_header, datagram_header, data)
-            self.broadcast(network_header, buffer)
-            self.send_seq += 1
-
-    def _max_fragment_size(self):
+    def mtu(self):
         # We want uniform packets, so get the min L2 MTU
         return self.link_multiplexer.mtu() - MeshProtocol.HeaderBytes
 
     def route_packet(self, address: L3Address) -> Tuple[bool, int]:
         # Subtract L3 header size and multiply by max fragments
-        l3_mtu = MeshProtocol.MaxFragments * (self._max_fragment_size() - MeshProtocol.HeaderBytes)
+        l3_mtu = MeshProtocol.MaxFragments * (self.mtu() - MeshProtocol.HeaderBytes)
         return True, l3_mtu
 
     def send_packet(self, payload: L3Payload) -> bool:
@@ -333,5 +234,6 @@ class MeshProtocol(L3Protocol, LoggingMixin):
         # By default we listen for all addresses
         pass
 
-    def register_transport_protocol(self, protocol: L4Protocol) -> None:
-        self.datagram_manager = protocol
+    def register_transport_protocol(self, protocol) -> None:
+        # TODO remove this from L3Protocol
+        pass

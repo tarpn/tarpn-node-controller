@@ -5,13 +5,9 @@ import os
 import shutil
 import sys
 from functools import partial
-from typing import Dict
-
-from pyformance.reporters import ConsoleReporter
 
 import tarpn.netrom.router
 from tarpn.application import TransportMultiplexer, MultiplexingProtocol, ApplicationProtocol
-from tarpn.application.command import NodeCommandProcessor
 from tarpn.ax25 import AX25Call
 from tarpn.datalink import L2FIFOQueue
 from tarpn.datalink.ax25_l2 import AX25Protocol, DefaultLinkMultiplexer
@@ -19,14 +15,17 @@ from tarpn.datalink.protocol import L2IOLoop
 from tarpn.io.kiss import KISSProtocol
 from tarpn.io.serial import SerialDevice
 from tarpn.network import L3Protocols, L3PriorityQueue
-from tarpn.network.mesh.protocol import MeshProtocol
 from tarpn.network.mesh import MeshAddress
-from tarpn.network.netrom_l3 import NetRomL3
+from tarpn.network.mesh.header import Protocol
+from tarpn.network.mesh.protocol import MeshProtocol, L4Handlers
 from tarpn.network.nolayer3 import NoLayer3Protocol
 from tarpn.scheduler import Scheduler
 from tarpn.settings import Settings
-from tarpn.transport.mesh_l4 import DatagramProtocol, MeshTransportAddress
-from tarpn.transport.netrom_l4 import NetRomTransportProtocol
+from tarpn.transport.mesh.broadcast import BroadcastProtocol
+from tarpn.transport.mesh.datagram import DatagramProtocol
+from tarpn.transport.mesh.fragment import FragmentProtocol
+from tarpn.transport.mesh.reliable import ReliableProtocol, ReliableManager
+from tarpn.transport.mesh_l4 import MeshTransportManager, MeshTransportAddress
 from tarpn.transport.unix import UnixServerThread
 from tarpn.util import WallTime
 
@@ -100,14 +99,29 @@ def run_node(args):
     #                      scheduler, l2_multi, routing_table)
 
     mesh_address = MeshAddress.parse(s.network_configs().get("mesh.address"))
-    mesh_l3 = MeshProtocol(WallTime(), mesh_address, l2_multi, scheduler)
+    l4_handlers = L4Handlers()
+    mesh_l3 = MeshProtocol(WallTime(), mesh_address, l2_multi, l4_handlers, scheduler)
     # l3_protocols.register(netrom_l3)
     l3_protocols.register(NoLayer3Protocol())
     l3_protocols.register(mesh_l3)
 
     # Create the L4 protocols
     # netrom_l4 = NetRomTransportProtocol(s.network_configs(), netrom_l3, scheduler)
-    mesh_l4 = DatagramProtocol(mesh_l3)
+    mesh_l4 = MeshTransportManager(mesh_l3)
+
+    # Register L4 handlers
+    reliable = ReliableManager(mesh_l3, scheduler)
+    fragment_protocol = FragmentProtocol(mesh_l3, mesh_l4)
+    reliable_protocol = ReliableProtocol(mesh_l3, reliable, l4_handlers)
+    datagram_protocol = DatagramProtocol(mesh_l3, mesh_l4, fragment_protocol, reliable_protocol)
+    broadcast_protocol = BroadcastProtocol(mesh_l3, mesh_l4, reliable)
+    l4_handlers.register_l4(Protocol.FRAGMENT, fragment_protocol)
+    l4_handlers.register_l4(Protocol.RELIABLE, reliable_protocol)
+    l4_handlers.register_l4(Protocol.DATAGRAM, datagram_protocol)
+    l4_handlers.register_l4(Protocol.BROADCAST, broadcast_protocol)
+
+    # TODO fix circular dependency here
+    mesh_l4.broadcast_protocol = broadcast_protocol
 
     # Bind the command processor
     # ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), l2s=l2_multi, l3=netrom_l3,
@@ -130,9 +144,9 @@ def run_node(args):
         mesh_l4.bind(multiplexer_protocol, app_address.address, app_address.port)
 
     # Start a metrics reporter
-    reporter = ConsoleReporter(reporting_interval=300)
-    scheduler.timer(10_000, reporter.start, True)
-    scheduler.add_shutdown_hook(reporter.stop)
+    #reporter = ConsoleReporter(reporting_interval=300)
+    #scheduler.timer(10_000, reporter.start, True)
+    #scheduler.add_shutdown_hook(reporter.stop)
 
     logger.info("Finished Startup")
     try:

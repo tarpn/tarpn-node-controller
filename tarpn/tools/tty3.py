@@ -17,7 +17,7 @@ from tarpn.network.mesh.protocol import MeshProtocol
 from tarpn.scheduler import Scheduler
 from tarpn.settings import PortConfig
 from tarpn.transport import Transport, L4Address
-from tarpn.transport.mesh_l4 import DatagramProtocol
+from tarpn.transport.mesh_l4 import MeshTransportManager
 from tarpn.transport import DatagramProtocol as DProtocol
 from tarpn.util import shutdown
 
@@ -114,7 +114,7 @@ def main():
         scheduler=scheduler)
     l3_protocols.register(mesh_l3)
 
-    mesh_l4 = DatagramProtocol(mesh_l3)
+    mesh_l4 = MeshTransportManager(mesh_l3)
 
     tty = TTY()
     loop = asyncio.get_event_loop()

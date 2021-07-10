@@ -3,20 +3,19 @@ from io import BytesIO
 
 from tarpn.crc import crc_b
 from tarpn.network import QoS
-from tarpn.network.mesh.header import PacketHeader, Protocol, MeshAddress, DatagramHeader, \
-    FragmentHeader, Flags
-from tarpn.network.mesh.protocol import PacketCodec, TTLCache
+from tarpn.network.mesh.header import NetworkHeader, Protocol, MeshAddress, DatagramHeader, \
+    FragmentHeader, FragmentFlags
+from tarpn.network.mesh.protocol import encode_packet
+from tarpn.util import TTLCache
 from ..utils import MockTime
 
 
 class TestMeshHeaders(unittest.TestCase):
-    codec = PacketCodec()
-
     def test_ttl_cache(self):
         time = MockTime()
         cache = TTLCache(time, 10)
 
-        header = PacketHeader(
+        header = NetworkHeader(
             version=0,
             protocol=Protocol.DATAGRAM,
             qos=QoS.Default,
@@ -26,10 +25,10 @@ class TestMeshHeaders(unittest.TestCase):
             source=MeshAddress(1),
             destination=MeshAddress(2))
 
-        self.assertFalse(cache.contains(header))
-        self.assertTrue(cache.contains(header))
+        self.assertFalse(cache.contains(hash(header)))
+        self.assertTrue(cache.contains(hash(header)))
 
-        same_header = PacketHeader(
+        same_header = NetworkHeader(
             version=0,
             protocol=Protocol.DATAGRAM,
             qos=QoS.Default,
@@ -39,9 +38,9 @@ class TestMeshHeaders(unittest.TestCase):
             source=MeshAddress(1),
             destination=MeshAddress(2))
 
-        self.assertTrue(cache.contains(same_header))
+        self.assertTrue(cache.contains(hash(same_header)))
 
-        diff_header = PacketHeader(
+        diff_header = NetworkHeader(
             version=0,
             protocol=Protocol.DATAGRAM,
             qos=QoS.Default,
@@ -51,12 +50,12 @@ class TestMeshHeaders(unittest.TestCase):
             source=MeshAddress(1),
             destination=MeshAddress(2))
 
-        self.assertFalse(cache.contains(diff_header))
-        self.assertTrue(cache.contains(diff_header))
+        self.assertFalse(cache.contains(hash(diff_header)))
+        self.assertTrue(cache.contains(hash(diff_header)))
 
         time.sleep(11)
-        self.assertFalse(cache.contains(header))
-        self.assertFalse(cache.contains(diff_header))
+        self.assertFalse(cache.contains(hash(header)))
+        self.assertFalse(cache.contains(hash(diff_header)))
 
     def test_encode_decode_datagram(self):
         msg = "Hello, World!".encode("utf-8")
@@ -66,7 +65,7 @@ class TestMeshHeaders(unittest.TestCase):
             length=len(msg),
             checksum=crc_b(msg))
 
-        header1 = PacketHeader(
+        header1 = NetworkHeader(
             version=0,
             protocol=Protocol.DATAGRAM,
             qos=QoS.Default,
@@ -76,12 +75,12 @@ class TestMeshHeaders(unittest.TestCase):
             source=MeshAddress(1),
             destination=MeshAddress(2))
 
-        data = self.codec.encode_packet(header1, datagram_header_1, msg)
+        data = encode_packet(header1, [datagram_header_1], msg)
         stream = BytesIO(data)
-        header2 = self.codec.decode_header(stream)
-        datagram2 = self.codec.decode_packet(header2, stream)
+        header2 = NetworkHeader.decode(stream)
+        datagram2 = DatagramHeader.decode(stream)
         self.assertEqual(header1, header2)
-        self.assertEqual(datagram_header_1, datagram2.datagram_header)
+        self.assertEqual(datagram_header_1, datagram2)
 
     def test_encode_decode_fragment(self):
         msg = "Hello, World!".encode("utf-8")
@@ -91,9 +90,9 @@ class TestMeshHeaders(unittest.TestCase):
             length=len(msg),
             checksum=crc_b(msg))
 
-        fragment1 = FragmentHeader(Protocol.DATAGRAM, Flags.NONE, 0, 99)
+        fragment1 = FragmentHeader(Protocol.DATAGRAM, FragmentFlags.NONE, 0, 99)
 
-        header1 = PacketHeader(
+        header1 = NetworkHeader(
             version=0,
             protocol=Protocol.FRAGMENT,
             qos=QoS.Default,
@@ -110,8 +109,10 @@ class TestMeshHeaders(unittest.TestCase):
         stream.write(msg)
         stream.seek(0)
 
-        header2 = self.codec.decode_header(stream)
-        datagram = self.codec.decode_packet(header2, stream)
+        header2 = NetworkHeader.decode(stream)
+        fragment = FragmentHeader.decode(stream)
+        datagram = DatagramHeader.decode(stream)
+        msg2 = stream.read()
         self.assertEqual(header1, header2)
-        self.assertEqual(datagram1, datagram.datagram_header)
-        self.assertEqual(datagram.payload, msg)
+        self.assertEqual(datagram1, datagram)
+        self.assertEqual(msg2, msg)

@@ -129,7 +129,7 @@ class AppRunnerProtocol(Protocol, LoggingMixin):
 
 
 async def create_and_watch_connection(loop, factory, sock):
-    retry_backoff_iter = backoff(1, 1.2, 10)
+    retry_backoff_iter = backoff(0.050, 1.2, 1.0)
     await asyncio.sleep(next(retry_backoff_iter))
     transport, protocol = None, None
     while True:

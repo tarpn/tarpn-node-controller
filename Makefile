@@ -7,17 +7,18 @@ init:
 
 .PHONY: deps
 deps:
-	. venv/bin/activate; pip install -e .[develop]
+	./venv/bin/pip install -e .[develop]
 
 .PHONY: dist
 dist:
-	. venv/bin/activate; python setup.py egg_info --tag-build "dev+git.$$(git rev-parse --short HEAD)" sdist; pip wheel --no-index --no-deps --wheel-dir dist dist/*.tar.gz
+	./venv/bin/python setup.py egg_info --tag-build "dev+git.$$(git rev-parse --short HEAD)" sdist; 
+	./venv/bin/pip wheel --no-index --no-deps --wheel-dir dist dist/*.tar.gz
 	ls dist
 
 
 .PHONY: test
 test:
-	. venv/bin/activate; py.test
+	./venv/bin/pytest
 
 .PHONY: clean
 clean: ptys-down

@@ -90,6 +90,12 @@ class L3Protocol:
         """
         raise NotImplementedError
 
+    def mtu(self) -> int:
+        """
+        The maximum packet size that can be transmitted with this network protocol
+        """
+        raise NotImplementedError
+
 
 class L3Protocols(LoggingMixin):
     def __init__(self):

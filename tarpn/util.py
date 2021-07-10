@@ -5,8 +5,9 @@ import math
 import struct
 import threading
 import time
+from collections import deque
 from io import BytesIO
-from typing import Callable, Iterator, Dict, Collection, List
+from typing import Callable, Iterator, Dict, Collection, List, Set, Tuple
 
 
 class Timer:
@@ -351,3 +352,46 @@ class WallTime(Time):
 
     def datetime(self) -> datetime:
         return datetime.datetime.utcnow()
+
+
+class Sequence(int):
+    def __lt__(self, other):
+        delta = super().__sub__(other)
+        signed = struct.unpack('<h', struct.pack('<H', delta))[0]
+        if signed < 0:
+            return -1
+        elif signed > 0:
+            return 1
+        else:
+            return 0
+
+    def __sub__(self, other):
+        delta = abs(super().__sub__(other))
+        signed = struct.unpack('<h', struct.pack('<H', delta))[0]
+        return signed
+
+
+class TTLCache:
+    def __init__(self, time: Time, expiry_ms: int):
+        self.time = time
+        self.expiry_ms = expiry_ms
+        self.cache: Set[int] = set()
+        self.seen: List[Tuple[int, int]] = list()
+
+    def contains(self, hash_code: int) -> bool:
+        """Check if a packet header has been seen before"""
+        now = self.time.time()
+        removed = []
+        for i, (expire, item) in zip(range(len(self.seen)), self.seen):
+            if now > expire:
+                removed.append(i)
+                self.cache.remove(item)
+        for i in removed[::-1]:
+            del self.seen[i]
+
+        if hash_code in self.cache:
+            return True
+        else:
+            self.cache.add(hash_code)
+            self.seen.append((now + self.expiry_ms, hash_code))
+            return False
