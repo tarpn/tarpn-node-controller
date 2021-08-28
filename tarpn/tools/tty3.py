@@ -101,7 +101,7 @@ def main():
     l3_protocols = L3Protocols()
     l2_multi = DefaultLinkMultiplexer(L3PriorityQueue, scheduler)
     l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
-    l2 = AX25Protocol(port_config.port_id(), AX25Call.parse(args.callsign), scheduler,
+    l2 = AX25Protocol(port_config, port_config.port_id(), AX25Call.parse(args.callsign), scheduler,
                       l2_queueing, l2_multi, l3_protocols)
     kiss = KISSProtocol(port_config.port_id(), l2_queueing, port_config.get_boolean("kiss.checksum", False))
     SerialDevice(kiss, port_config.get("serial.device"), port_config.get_int("serial.speed"), scheduler)

@@ -23,6 +23,12 @@ class L2Protocol:
         """
         raise NotImplementedError
 
+    def get_link_cost(self) -> int:
+        """
+        Return the cost of this link.
+        """
+        raise NotImplementedError
+
     def get_peer_address(self, link_id) -> L2Address:
         """
         Return the address for a peer connected to this device
@@ -94,6 +100,9 @@ class LinkMultiplexer:
         #  Used by AX25Protocol to register itself
         raise NotImplementedError
 
+    def list_devices(self) -> Dict[int, L2Protocol]:
+        raise NotImplementedError
+
     def add_link(self, l2_protocol: L2Protocol) -> int:
         #  Used in AX25Protocol to create links in maybe_open_link
         raise NotImplementedError
@@ -155,6 +164,9 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
                 self.queues[l2_protocol.get_device_id()] = queue
                 self.l2_devices[l2_protocol.get_device_id()] = l2_protocol
                 self.scheduler.submit(L2L3Driver(queue, l2_protocol))
+
+    def list_devices(self) -> Dict[int, L2Protocol]:
+        return dict(self.l2_devices)
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
         with self.lock:

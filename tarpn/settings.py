@@ -136,7 +136,7 @@ class Config(Mapping):
     def as_dict(self) -> dict:
         return dict(self._config_section)
 
-    def get(self, key, default: str = None):
+    def get(self, key, default: str = None) -> str:
         value = self._config_section.get(key)
         if value is None:
             value = default
@@ -144,7 +144,7 @@ class Config(Mapping):
             raise KeyError(f"Unknown key {key} in section {self._section}")
         return value
 
-    def get_int(self, key, default: int = None):
+    def get_int(self, key, default: int = None) -> int:
         value = self._config_section.getint(key)
         if value is None:
             value = default
@@ -152,7 +152,7 @@ class Config(Mapping):
             raise KeyError(f"Unknown key {key} in section {self._section}")
         return value
 
-    def get_boolean(self, key, default: bool = None):
+    def get_boolean(self, key, default: bool = None) -> bool:
         value = self._config_section.getboolean(key)
         if value is None:
             value = default

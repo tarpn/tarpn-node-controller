@@ -1,23 +1,23 @@
 import asyncio
 import datetime
 import json
-import math
+import secrets
 import struct
 import threading
 import time
-from collections import deque
 from io import BytesIO
+from itertools import cycle
 from typing import Callable, Iterator, Dict, Collection, List, Set, Tuple
 
 
 class Timer:
-    def __init__(self, delay: float, cb: Callable[[], None]):
+    def __init__(self, delay_ms: float, cb: Callable[[], None]):
         """
         A resettable and cancelable timer class
-        :param delay: Delay in milliseconds
+        :param delay_ms: Delay in milliseconds
         :param cb: A callback that takes no arguments
         """
-        self.delay = delay
+        self.delay = delay_ms
         self._cb = cb
         self._started = 0
         self._timer = None
@@ -276,19 +276,18 @@ class MutableVectorClock(VectorClock):
 
 class ByteUtils:
     @staticmethod
-    def write_utf8(string: str, buffer: bytearray) -> int:
+    def write_utf8(data: BytesIO, string: str) -> None:
         utf8_bytes = string.encode("utf-8")
         utf8_len = len(utf8_bytes)
-        buffer.extend(struct.pack(">I", utf8_len))
-        buffer.extend(utf8_bytes)
-        return 4 + utf8_len
+        data.write(struct.pack(">B", utf8_len))
+        data.write(utf8_bytes)
 
     @staticmethod
-    def read_utf8(buffer: bytes) -> (str, int):
-        (utf8_len) = struct.unpack(">I", buffer)
-        utf8_bytes = buffer[4: 4 + utf8_len]
+    def read_utf8(data: BytesIO) -> str:
+        utf8_len = struct.unpack(">B", data.read(1))[0]
+        utf8_bytes = data.read(utf8_len)
         string = utf8_bytes.decode("utf-8")
-        return string, 4 + utf8_len
+        return string
 
     @staticmethod
     def read_int8(data: BytesIO) -> int:
@@ -327,7 +326,7 @@ class ByteUtils:
         assert hi == hi & (2 ** hi_n - 1)
         assert lo == lo & (2 ** (8 - hi_n) - 1)
         byte = (hi << (8 - hi_n)) | lo
-        data.write(struct.pack(">b", byte))
+        data.write(struct.pack(">B", byte))
 
     @staticmethod
     def hi_bits(byte: int, n: int):
@@ -395,3 +394,43 @@ class TTLCache:
             self.cache.add(hash_code)
             self.seen.append((now + self.expiry_ms, hash_code))
             return False
+
+
+def lollipop_sequence():
+    "Returns a generator of an 8-bit lollipop sequence"
+    for i in range(-128, 128):
+        yield i
+    for i in cycle(range(0, 128)):
+        yield i
+
+
+def lollipop_compare(old_epoch: int, new_epoch: int) -> int:
+    """
+    Compares two 8-bit lollipop sequences
+    :returns: a value indicating if the given new_epoch is in fact newer than old_epoch
+        1 if the new_epoch is newer than old_epoch
+        0 if the new_epoch is newer and the sequence has been reset
+        -1 if new_epoch is not newer than old_epoch
+    """
+    if old_epoch == new_epoch:
+        return -1
+
+    if new_epoch > old_epoch:
+        # Case 1: new epoch is greater, 43 > 42
+        return 1
+    elif new_epoch < 0 <= old_epoch:
+        # Case 2: new epoch is lesser, but is negative, -127 < 0 <= 10
+        return 0
+    elif new_epoch < old_epoch < 0:
+        # Case 3: both negative, this is either a reset or a delayed packet
+        # from another neighbor. Let's assume it's a reset. -126 < -120 < 0
+        return 0
+    elif new_epoch < old_epoch and (old_epoch - new_epoch > 32):
+        # Case 3: wrap around, 10 < 128, (128 - 10 > 32)
+        return 1
+    else:
+        return -1
+
+
+def secure_random_byte() -> int:
+    return struct.unpack('<B', secrets.token_bytes(1))[0]

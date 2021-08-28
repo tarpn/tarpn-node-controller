@@ -52,7 +52,8 @@ class KISSProtocol(IOProtocol, LoggingMixin, MetricsMixin):
                             self.counter("kiss", "hardware").inc()
                             self._on_hardware(frame)
                         else:
-                            self.warning(f"Dropping KISS frame with unsupported command {frame.command}: {frame}")
+                            self.warning(f"Dropping KISS frame on port {self.port_id} with unsupported command "
+                                         f"{frame.command}: {frame}")
                             self.counter("kiss", "unknown").inc()
                         self.msgs_recvd += 1
                     elif not self.saw_fend:

@@ -8,6 +8,9 @@ class L4Address:
     def network_address(self) -> L3Address:
         raise NotImplementedError
 
+    def port_number(self) -> int:
+        raise NotImplementedError
+
 
 class L4Protocol:
     pass
@@ -87,10 +90,14 @@ class Protocol:
 
 
 class DatagramProtocol(Protocol):
-    def datagram_received(self, data: bytes, address: L4Address):
+    def datagram_received(self, data: bytes, address: L4Address) -> None:
         raise NotImplementedError()
 
 
 class DatagramTransport(Transport, ABC):
     def write_to(self, address: str, data: Any) -> None:
         raise NotImplementedError()
+
+
+class BroadcastTransport(Transport, ABC):
+    pass

@@ -68,8 +68,12 @@ class DatagramProtocol(L4Handler, LoggingMixin):
                     source=source,
                     destination=destination,
                 )
-                buffer = encode_packet(network_header, [datagram_header], data)
-                self.network.send(network_header, buffer)
+                buffer = BytesIO()
+                network_header.encode(buffer)
+                datagram_header.encode(buffer)
+                buffer.write(data)
+                buffer.seek(0)
+                self.network.send(network_header, buffer.read())
 
     def handle_l4(self, network_header: NetworkHeader, stream: BytesIO):
         datagram_header = DatagramHeader.decode(stream)

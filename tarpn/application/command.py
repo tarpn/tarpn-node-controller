@@ -6,27 +6,26 @@ from time import sleep
 from typing import Optional, cast
 
 from tarpn.ax25 import AX25Call
-from tarpn.datalink.protocol import DefaultLinkMultiplexer
+from tarpn.datalink.protocol import LinkMultiplexer
 from tarpn.log import LoggingMixin
-from tarpn.netrom.router import NetRomRoutingTable
-from tarpn.network.netrom_l3 import NetRomL3
+from tarpn.network.mesh.protocol import MeshProtocol
 from tarpn.scheduler import Scheduler
 from tarpn.settings import NetworkConfig
-from tarpn.transport import Protocol, Transport
-from tarpn.transport.netrom_l4 import NetRomTransportProtocol, NetRomTransport
+from tarpn.transport import Protocol, Transport, DatagramProtocol, L4Address
+from tarpn.transport.mesh_l4 import MeshTransportManager
 
 
-class NodeCommandProcessor(Protocol, LoggingMixin):
+class NodeCommandProcessor(DatagramProtocol, LoggingMixin):
     def __init__(self,
                  config: NetworkConfig,
-                 l2s: DefaultLinkMultiplexer,
-                 l3: NetRomL3,
-                 l4: NetRomTransportProtocol,
+                 link: LinkMultiplexer,
+                 network: MeshProtocol,
+                 transport_manager: MeshTransportManager,
                  scheduler: Scheduler):
         self.config = config
-        self.l3 = l3
-        self.l2s = l2s
-        self.l4 = l4
+        self.l3 = network
+        self.l2s = link
+        self.l4 = transport_manager
         self.scheduler = scheduler
         self.transport: Optional[Transport] = None
         self.client_transport: Optional[Transport] = None
@@ -87,9 +86,9 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
         else:
             self.warning("No client connection exists to lose")
 
-    def data_received(self, data: bytes) -> None:
+    def datagram_received(self, data: bytes, address: L4Address) -> None:
         s = data.decode("ASCII").strip().upper()
-        self.info(f"Data: {s}")
+        self.info(f"Data: {s} from {address}")
 
         # If we're waiting for a connection, either wait or let user BYE
         if self.pending_open is not None:
@@ -114,57 +113,35 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
         try:
             parsed_args = self.parser.parse_args(shlex.split(s.lower()))
         except BaseException:
-            self.println(self.parser.format_help(), True)
+            self.transport.write_to(self.println(self.parser.format_help(), True), address)
             return
 
         if parsed_args.command is None:
             parsed_args.command = "help"
         if parsed_args.command == "help":
-            self.println(self.parser.format_help(), True)
+            self.transport.write_to(self.println(self.parser.format_help(), True), address)
         elif parsed_args.command == "ports":
             resp = "Ports:\n"
-            for device_id, l2 in self.l2s.l2_devices.items():
+            for device_id, l2 in self.l2s.list_devices().items():
                 resp += f" - Port {device_id}: {l2.get_link_address()}\n"
-            self.println(resp, True)
+            self.transport.write_to(self.println(resp, True), address)
         elif parsed_args.command == "links":
             resp = "Links:\n"
-            for link_id, l2 in self.l2s.logical_links.items():
-                if l2.peer_connected(link_id):
-                    resp += f" - L2 Link {link_id}, Port {l2.get_device_id()}: "
-                    resp += f"{l2.get_link_address()}>{l2.get_peer_address(link_id)}\n"
-            for circuit, (transport, protocol) in self.l4.l3_connections.items():
-                nt = cast(NetRomTransport, transport)
-                if transport == self.transport:
-                    resp += f" * L4 Link {circuit}: {nt.local_call}>{nt.remote_call}\n"
-                else:
-                    resp += f" - L4 Link {circuit}: {nt.local_call}>{nt.remote_call}\n"
-            self.println(resp, True)
+            for neighbor, link_states in self.l3.valid_link_states().items():
+                resp += f"{neighbor} epoch={self.l3.link_state_epochs.get(neighbor)}\r\n"
+                for link_state in link_states:
+                    resp += f"\t{link_state.node} q={link_state.quality}\r\n"
+            self.transport.write_to(self.println(resp, True), address)
         elif parsed_args.command == "nodes":
-            routing_table = cast(NetRomRoutingTable, self.l3.router)
-            resp = "Nodes:\n"
-            for i, dest in enumerate(routing_table.destinations.values()):
-                resp += f"{dest.node_alias}:{dest.node_call}\t"
-                if i % 4 == 3:
-                    resp += "\n"
-            self.println(resp, True)
+            self.println("not implemented", True)
         elif parsed_args.command == "routes":
-            routing_table = cast(NetRomRoutingTable, self.l3.router)
-            resp = "Routes:\n"
-            for dest in routing_table.destinations.values():
-                for route in dest.neighbor_map.values():
-                    resp += f"{dest.node_alias}:{dest.node_call} via {route.next_hop}, qal={route.quality} obs={route.obsolescence}\n"
-            self.println(resp, True)
+            self.println("not implemented", True)
         elif parsed_args.command == "whoami":
-            if isinstance(self.transport, NetRomTransport):
-                nt = cast(NetRomTransport, self.transport)
-                self.println(f"Current user is {nt.origin_user.callsign} connected from {nt.origin_node}", True)
-            else:
-                self.println(f"Current user is default connected from {self.transport.get_extra_info('peername')}",
-                             True)
+            self.println("not implemented", True)
         elif parsed_args.command == "hostname":
             self.println(f"Current host is {self.config.node_call()}", True)
         elif parsed_args.command == "bye":
-            self.println("Goodbye.")
+            self.transport.write_to(self.println("Goodbye."), address)
             self.transport.close()
         elif parsed_args.command == "connect":
             """
@@ -173,29 +150,19 @@ class NodeCommandProcessor(Protocol, LoggingMixin):
             Create a half-opened client connection to the remote station. Once the connect ack is received, 
             the connection will be completed and we will create the protocol and transport objects.
             """
-            remote_call = AX25Call.parse(parsed_args.dest)
-            local_call = AX25Call.parse(self.config.node_call())
-            self.println(f"Connecting to {remote_call}...", True)
-
-            if isinstance(self.transport, NetRomTransport):
-                nt = cast(NetRomTransport, self.transport)
-                self.l4.open(partial(ConnectProtocol, self), local_call, remote_call, nt.origin_node, nt.origin_user)
-                self.pending_open = remote_call
-            else:
-                logging.warning(
-                    f"Connect command is only supported for NetworkTransport, not {self.transport.__class__}")
-                self.println(f"Connect command is only supported for NetworkTransport", True)
-
+            self.println("not implemented", True)
+            #self.l4.connect(partial(ConnectProtocol, self), local_call, remote_call, nt.origin_node, nt.origin_user)
+            #self.pending_open = remote_call
         else:
             logging.warning(f"Unhandled command {parsed_args.command}")
             self.println(f"Unhandled command {parsed_args.command}", True)
 
-    def println(self, s: str, final=False):
+    def println(self, s: str, final=False) -> bytes:
         s = s.strip() + "\n"
         if not final:
-            self.transport.write(s.replace("\n", "\r\n").encode("utf-8"))
+            return s.replace("\n", "\r\n").encode("utf-8")
         else:
-            self.transport.write((s + "> ").replace("\n", "\r\n").encode("utf-8"))
+            return (s + "> ").replace("\n", "\r\n").encode("utf-8")
 
 
 class ConnectProtocol(Protocol):

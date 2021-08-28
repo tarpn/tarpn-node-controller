@@ -58,7 +58,9 @@ setup(
         'pyserial-asyncio==0.4',
         'msgpack==1.0.0',
         'pyformance==0.4',
-        'Flask==1.1.2'
+        'Flask==1.1.2',
+        'networkx==2.6.2',
+        'cmd2==2.1.2'
     ],
     extras_require=EXTRA_REQUIRES
 )

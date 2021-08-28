@@ -32,20 +32,19 @@ class BroadcastProtocol(L4Handler, LoggingMixin):
 
     def handle_l4(self, network_header: NetworkHeader, stream: BytesIO):
         broadcast_header = BroadcastHeader.decode(stream)
-        self.debug(f"Handling {broadcast_header}")
+        self.debug(f"Handling {broadcast_header} {network_header}")
 
         if self.ttl_cache.contains(hash((broadcast_header.source, broadcast_header.sequence))):
             return
 
         data = stream.read()
 
-        # Now forward it to everyone we've heard from recently
-        neighbors = self.network.neighbors(since=300)
-        if len(neighbors) == 0:
-            self.debug("Skipping forwarding since we have no neighbors.")
-            self.network.send_discovery()
+        # Now forward it to everyone we've heard from recently except who we heard it from
+        neighbors = self.network.alive_neighbors()
         for neighbor in neighbors:
             if neighbor == broadcast_header.source:
+                continue
+            if neighbor == network_header.source:
                 continue
             network_header = NetworkHeader(
                 version=0,
@@ -66,9 +65,16 @@ class BroadcastProtocol(L4Handler, LoggingMixin):
         self.transport.handle_broadcast(broadcast_header.source, broadcast_header.port, data)
 
     def send_broadcast(self, port: int, data: bytes):
-        neighbors = self.network.neighbors(since=300)
+        neighbors = self.network.alive_neighbors()
         if len(neighbors) == 0:
             self.debug(f"Skipping broadcast since we have no neighbors.")
+        broadcast_header = BroadcastHeader(
+            source=self.network.our_address,
+            port=port,
+            sequence=self.next_sequence(),
+            length=len(data),
+            checksum=crc_b(data)
+        )
         for neighbor in neighbors:
             network_header = NetworkHeader(
                 version=0,
@@ -79,13 +85,6 @@ class BroadcastProtocol(L4Handler, LoggingMixin):
                 length=0,
                 source=self.network.our_address,
                 destination=neighbor,
-            )
-            broadcast_header = BroadcastHeader(
-                source=self.network.our_address,
-                port=port,
-                sequence=self.next_sequence(),
-                length=len(data),
-                checksum=crc_b(data)
             )
             buffer = encode_partial_packet([broadcast_header], data)
             self.info(f"Broadcasting {broadcast_header} to {neighbor}: {data}")

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+import datetime
+from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag
 from io import BytesIO
 from typing import List
@@ -8,12 +9,19 @@ from tarpn.util import ByteUtils
 
 
 class Protocol(IntEnum):
+    # up to 0x0F
     NONE = 0x00
-    DISCOVER = 0x01
-    DATAGRAM = 0x02
-    FRAGMENT = 0x03
-    RELIABLE = 0x04
-    BROADCAST = 0x05
+    CONTROL = 0x01
+    HELLO = 0x02
+    LINK_STATE = 0x03
+    LINK_STATE_QUERY = 0x04
+
+    RECORD = 0x05
+
+    DATAGRAM = 0x06
+    FRAGMENT = 0x07
+    RELIABLE = 0x08
+    BROADCAST = 0x09
 
     def __str__(self):
         return self.name
@@ -24,7 +32,10 @@ class Protocol(IntEnum):
 
 @dataclass(eq=True, frozen=True)
 class Header:
-    def encode(self, data: BytesIO):
+    def encode(self, data: BytesIO) -> None:
+        raise NotImplementedError()
+
+    def size(self) -> int:
         raise NotImplementedError()
 
 
@@ -44,6 +55,10 @@ class NetworkHeader(Header):
 
     def __hash__(self):
         return hash(self.id())
+
+    @classmethod
+    def size(cls):
+        return 10
 
     @classmethod
     def decode(cls, data: BytesIO):
@@ -75,29 +90,179 @@ class NetworkHeader(Header):
         ByteUtils.write_uint16(data, self.destination.id)
 
 
+class ControlType(IntEnum):
+    # Up to 0x7F
+    PING = 0x00
+    LOOKUP = 0x01
+
+    def _missing_(cls, value):
+        return None
+
+
 @dataclass(eq=True, frozen=True)
-class DiscoveryHeader(Header):
-    neighbors: List[MeshAddress]
-    last_seen_s: List[int]
+class ControlHeader(Header):
+    is_request: bool
+    control_type: ControlType
+    extra_length: int
+    extra: bytes
+
+    def size(self) -> int:
+        return 2 + self.extra_length
 
     @classmethod
     def decode(cls, data: BytesIO):
+        b = ByteUtils.read_uint8(data)
+        is_request = bool(ByteUtils.hi_bits(b, 1))
+        control_type = ControlType(ByteUtils.lo_bits(b, 7))
+        extra_length = ByteUtils.read_uint8(data)
+        extra = data.read(extra_length)
+        return cls(is_request=is_request, control_type=control_type, extra_length=extra_length, extra=extra)
+
+    def encode(self, data: BytesIO):
+        ByteUtils.write_hi_lo(data, int(self.is_request), self.control_type.value, 1)
+        ByteUtils.write_uint8(data, self.extra_length)
+        data.write(self.extra)
+
+
+@dataclass(eq=True, frozen=True)
+class HelloHeader(Header):
+    name: str
+    neighbors: List[MeshAddress]
+
+    def size(self) -> int:
+        return len(self.name) + 1 + 2 * len(self.neighbors)
+
+    @classmethod
+    def decode(cls, data: BytesIO):
+        name = ByteUtils.read_utf8(data)
         count = ByteUtils.read_uint8(data)
         neighbors = []
-        last_seen_s = []
         for _ in range(count):
             neighbors.append(MeshAddress(ByteUtils.read_uint16(data)))
-            last_seen_s.append(ByteUtils.read_uint16(data))
+        return cls(name=name, neighbors=neighbors)
+
+    def encode(self, data: BytesIO):
+        ByteUtils.write_utf8(data, self.name)
+        ByteUtils.write_uint8(data, len(self.neighbors))
+        for neighbor in self.neighbors:
+            ByteUtils.write_uint16(data, neighbor.id)
+
+
+@dataclass(eq=True, frozen=True)
+class LinkStateHeader(Header):
+    node: MeshAddress
+    via: MeshAddress
+    quality: int
+    created: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+
+    @classmethod
+    def size(cls) -> int:
+        return 5
+
+    @classmethod
+    def decode(cls, data: BytesIO):
+        node = MeshAddress(ByteUtils.read_uint16(data))
+        via = MeshAddress(ByteUtils.read_uint16(data))
+        quality = ByteUtils.read_uint8(data)
+        return cls(node=node, via=via, quality=quality)
+
+    def encode(self, data: BytesIO):
+        ByteUtils.write_uint16(data, self.node.id)
+        ByteUtils.write_uint16(data, self.via.id)
+        ByteUtils.write_uint8(data, self.quality)
+
+
+@dataclass(eq=True, frozen=True)
+class LinkStateAdvertisementHeader(Header):
+    node: MeshAddress
+    name: str
+    epoch: int
+    link_states: List[LinkStateHeader]
+
+    def size(self) -> int:
+        return 4 + len(self.name.encode("utf-8")) + sum([link_state.size() for link_state in self.link_states])
+
+    @classmethod
+    def decode(cls, data: BytesIO):
+        node = MeshAddress(ByteUtils.read_uint16(data))
+        name = ByteUtils.read_utf8(data)
+        epoch = ByteUtils.read_int8(data)
+        count = ByteUtils.read_uint8(data)
+        link_states = []
+        for _ in range(count):
+            link_states.append(LinkStateHeader.decode(data))
         return cls(
-            neighbors=neighbors,
-            last_seen_s=last_seen_s
+            node=node,
+            name = name,
+            epoch=epoch,
+            link_states=link_states
         )
 
     def encode(self, data: BytesIO):
-        ByteUtils.write_uint8(data, len(self.neighbors))
-        for neighbor, last_seen in zip(self.neighbors, self.last_seen_s):
-            ByteUtils.write_uint16(data, neighbor.id)
-            ByteUtils.write_uint16(data, last_seen)
+        ByteUtils.write_uint16(data, self.node.id)
+        ByteUtils.write_utf8(data, self.name)
+        ByteUtils.write_int8(data, self.epoch)
+        ByteUtils.write_uint8(data, len(self.link_states))
+        for link_state in self.link_states:
+            link_state.encode(data)
+
+
+@dataclass(eq=True, frozen=True)
+class LinkStateQueryHeader(Header):
+    node: MeshAddress
+    epoch: int
+    link_nodes: List[MeshAddress]
+    link_epochs: List[int]
+
+    def size(self) -> int:
+        return 4 + 3 * len(self.link_nodes)
+
+    @classmethod
+    def decode(cls, data: BytesIO):
+        node = MeshAddress(ByteUtils.read_uint16(data))
+        epoch = ByteUtils.read_int8(data)
+        count = ByteUtils.read_uint8(data)
+        link_nodes = []
+        link_epochs = []
+        for _ in range(count):
+            link_nodes.append(MeshAddress(ByteUtils.read_uint16(data)))
+            link_epochs.append(ByteUtils.read_int8(data))
+        return cls(node=node, epoch=epoch, link_nodes=link_nodes, link_epochs=link_epochs)
+
+    def encode(self, data: BytesIO):
+        ByteUtils.write_uint16(data, self.node.id)
+        ByteUtils.write_int8(data, self.epoch)
+        ByteUtils.write_uint8(data, len(self.link_nodes))
+        for node, epoch in zip(self.link_nodes, self.link_epochs):
+            ByteUtils.write_uint16(data, node.id)
+            ByteUtils.write_int8(data, epoch)
+
+
+class RecordType(IntEnum):
+    # up to 0xFF
+    NAME = 0x01
+
+
+@dataclass(eq=True, frozen=True)
+class RecordHeader(Header):
+    record_type: RecordType
+    length: int
+    value: bytes
+
+    @classmethod
+    def decode(cls, data: BytesIO):
+        record_type = RecordType(ByteUtils.read_uint8(data))
+        length = ByteUtils.read_uint8(data)
+        value = data.read(length)
+        return cls(record_type=record_type, length=length, value=value)
+
+    def encode(self, data: BytesIO) -> None:
+        ByteUtils.write_uint8(data, self.record_type.value)
+        ByteUtils.write_uint8(data, self.length)
+        data.write(self.value)
+
+    def size(self) -> int:
+        return 2 + self.length
 
 
 class FragmentFlags(IntFlag):
@@ -113,6 +278,10 @@ class FragmentHeader(Header):
     sequence: int
 
     @classmethod
+    def size(cls) -> int:
+        return 4
+
+    @classmethod
     def decode(cls, data: BytesIO):
         byte = ByteUtils.read_int8(data)
         protocol = ByteUtils.hi_bits(byte, 4)
@@ -123,10 +292,6 @@ class FragmentHeader(Header):
                    flags=FragmentFlags(flags),
                    fragment=fragment,
                    sequence=sequence)
-
-    @staticmethod
-    def size() -> int:
-        return 4
 
     def encode(self, data: BytesIO):
         ByteUtils.write_hi_lo(data, self.protocol, self.flags, 4)
@@ -146,6 +311,10 @@ class ReliableHeader(Header):
     sequence: int
 
     @classmethod
+    def size(cls) -> int:
+        return 3
+
+    @classmethod
     def decode(cls, data: BytesIO):
         byte = ByteUtils.read_int8(data)
         protocol = ByteUtils.hi_bits(byte, 4)
@@ -157,10 +326,6 @@ class ReliableHeader(Header):
         ByteUtils.write_hi_lo(data, self.protocol, self.flags, 4)
         ByteUtils.write_uint16(data, self.sequence)
 
-    @classmethod
-    def size(cls):
-        return 3
-
 
 @dataclass(eq=True, frozen=True)
 class BroadcastHeader(Header):
@@ -169,6 +334,10 @@ class BroadcastHeader(Header):
     sequence: int
     length: int
     checksum: int
+
+    @classmethod
+    def size(cls) -> int:
+        return 9
 
     @classmethod
     def decode(cls, data: BytesIO):
@@ -202,6 +371,10 @@ class DatagramHeader(Header):
     checksum: int
 
     @classmethod
+    def size(cls) -> int:
+        return 6
+
+    @classmethod
     def decode(cls, data: BytesIO):
         source = ByteUtils.read_uint8(data)
         dest = ByteUtils.read_uint8(data)
@@ -211,10 +384,6 @@ class DatagramHeader(Header):
                    destination=dest,
                    length=length,
                    checksum=checksum)
-
-    @staticmethod
-    def size() -> int:
-        return 6
 
     def encode(self, data: BytesIO):
         ByteUtils.write_uint8(data, self.source)

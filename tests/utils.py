@@ -79,8 +79,8 @@ class MockTime(Time):
 
 
 class MockTimer(Timer):
-    def __init__(self, scheduler: Scheduler, delay: float, cb: Callable[[], None]):
-        super().__init__(delay, cb)
+    def __init__(self, scheduler: Scheduler, delay_ms: float, cb: Callable[[], None]):
+        super().__init__(delay_ms, cb)
         self.scheduler = scheduler
 
     def start(self):
@@ -106,8 +106,8 @@ class MockScheduler(Scheduler):
         self.tasks = []
         self.shutdown_tasks = []
 
-    def timer(self, delay: float, cb: Callable[[], None], auto_start=False) -> Timer:
-        t = MockTimer(self, delay, cb)
+    def timer(self, delay_ms: float, cb: Callable[[], None], auto_start=False) -> Timer:
+        t = MockTimer(self, delay_ms, cb)
         if auto_start:
             t.start()
         return t
@@ -164,6 +164,9 @@ class MockLinkMultiplexer(LinkMultiplexer):
 
     def register_device(self, l2_protocol: L2Protocol) -> None:
         pass
+
+    def list_devices(self) -> Dict[int, L2Protocol]:
+        return dict()
 
     def add_link(self, l2_protocol: L2Protocol) -> int:
         return -1

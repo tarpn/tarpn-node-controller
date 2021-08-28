@@ -10,6 +10,7 @@ from tarpn.datalink.protocol import L2Protocol, DefaultLinkMultiplexer
 from tarpn.network import L3Protocols, L3Payload, QoS
 from tarpn.log import LoggingMixin
 from tarpn.scheduler import Scheduler
+from tarpn.settings import PortConfig
 from tarpn.util import chunks
 
 
@@ -39,8 +40,11 @@ class AX25Address(L2Address):
 
 
 class AX25Protocol(L2Protocol, AX25, LoggingMixin):
-    def __init__(self, link_port: int, link_call: AX25Call, scheduler: Scheduler, queue: L2Queuing,
+    def __init__(self,
+                 config: PortConfig,
+                 link_port: int, link_call: AX25Call, scheduler: Scheduler, queue: L2Queuing,
                  link_multiplexer: DefaultLinkMultiplexer, l3_protocols: L3Protocols):
+        self.config = config
         self.link_port = link_port
         self.link_call = link_call
         self.queue = queue  # l2 buffer
@@ -76,6 +80,9 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
 
     def get_link_address(self) -> L2Address:
         return AX25Address.from_ax25_call(self.link_call)
+
+    def get_link_cost(self) -> int:
+        return int(300000 / self.config.get_int("port.bitrate", 1200))
 
     def get_peer_address(self, link_id) -> L2Address:
         return AX25Address.from_ax25_call(self.links_by_id.get(link_id))

@@ -1,5 +1,6 @@
 import logging
 import threading
+import traceback
 from abc import ABC
 from concurrent.futures import Future
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -13,6 +14,9 @@ class CloseableThread(threading.Thread, ABC):
     def __init__(self, name: str, target=None):
         threading.Thread.__init__(self, name=name, target=target)
 
+    def pre_close(self):
+        pass
+
     def close(self):
         raise NotImplementedError()
 
@@ -24,7 +28,10 @@ class CloseableThreadLoop(CloseableThread, ABC):
 
     def run(self):
         while not self.closed.is_set() and self.is_alive():
-            self.iter_loop()
+            try:
+                self.iter_loop()
+            except Exception as e:
+                traceback.print_tb(e)
 
     def close(self):
         self.closed.set()
@@ -41,8 +48,8 @@ class Scheduler(LoggingMixin):
         self._futures: List[Future] = list()
         LoggingMixin.__init__(self)
 
-    def timer(self, delay: float, cb: Callable[[], None], auto_start=False) -> Timer:
-        timer = ThreadingTimer(delay, cb)
+    def timer(self, delay_ms: float, cb: Callable[[], None], auto_start=False) -> Timer:
+        timer = ThreadingTimer(delay_ms, cb)
         self.shutdown_tasks.append(timer.cancel)
         if auto_start:
             timer.start()
@@ -67,6 +74,12 @@ class Scheduler(LoggingMixin):
         self.info("Shutting down")
 
         # Try to stop the threads nicely
+        for thread in self.threads:
+            try:
+                thread.pre_close()
+            except Exception:
+                self.exception(f"Exception in {thread.name} during pre_close")
+
         for thread in self.threads:
             try:
                 if thread.is_alive():

@@ -44,6 +44,7 @@ class ReliableChannel(LoggingMixin):
 
 class ReliableManager(LoggingMixin):
     MaxAckPending = 4
+    MaxResend = 10
 
     def __init__(self, network: MeshProtocol, scheduler: Scheduler):
         LoggingMixin.__init__(self)
@@ -118,9 +119,10 @@ class ReliableManager(LoggingMixin):
 
             item = self.sent[0]
             item.attempt += 1
-            if item.attempt > 3:
+            if item.attempt > ReliableManager.MaxResend:
                 self.info(f"Expiring {item}")
                 self.sent.remove(item)
+                self.network.failed_send(item.header.destination)
                 self.not_full.notify()
             else:
                 self.info(f"Resending {item}")
@@ -155,12 +157,12 @@ class ReliableProtocol(L4Handler, LoggingMixin):
             self.reliable_manager.handle_ack(network_header.source, reliable_header.sequence)
         else:
             # An ACK is being requested
-            if network_header.source not in self.network.neighbors():
+            if network_header.source not in self.network.alive_neighbors():
                 # Ignore if we haven't seen this neighbor before, we need discovery first
                 # TODO send discovery to this neighbor
                 self.debug(f"Ignoring {reliable_header} since we don't know this neighbor.")
                 return
-            network_header = NetworkHeader(
+            outgoing_network_header = NetworkHeader(
                 version=0,
                 qos=QoS.Default,
                 protocol=Protocol.RELIABLE,
@@ -176,12 +178,12 @@ class ReliableProtocol(L4Handler, LoggingMixin):
                 sequence=reliable_header.sequence,
             )
             response = BytesIO()
-            network_header.encode(response)
+            outgoing_network_header.encode(response)
             ack_header.encode(response)
             response.seek(0)
             buffer = response.read()
-            self.info(f"Sending Ack for {(network_header.source, reliable_header.sequence)}")
-            self.network.send(network_header, buffer)
+            self.info(f"Sending Ack for sequence {reliable_header.sequence} to address {outgoing_network_header.source}")
+            self.network.send(outgoing_network_header, buffer)
             self.handlers.handle_l4(network_header, reliable_header.protocol, stream)
 
     def send(self, header: NetworkHeader, reliable_header: ReliableHeader, buffer: bytes):

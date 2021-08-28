@@ -8,6 +8,8 @@ from functools import partial
 
 import tarpn.netrom.router
 from tarpn.application import TransportMultiplexer, MultiplexingProtocol, ApplicationProtocol
+from tarpn.application.command import NodeCommandProcessor
+from tarpn.application.shell import TarpnShellProtocol
 from tarpn.ax25 import AX25Call
 from tarpn.datalink import L2FIFOQueue
 from tarpn.datalink.ax25_l2 import AX25Protocol, DefaultLinkMultiplexer
@@ -84,13 +86,14 @@ def run_node(args):
     l2_multi = DefaultLinkMultiplexer(L3PriorityQueue, scheduler)
 
     for port_config in s.port_configs():
-        l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
-        l2 = AX25Protocol(port_config.port_id(), node_call, scheduler,
-                          l2_queueing, l2_multi, l3_protocols)
+        if port_config.get_boolean("port.enabled"):
+            l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
+            l2 = AX25Protocol(port_config, port_config.port_id(), node_call, scheduler,
+                              l2_queueing, l2_multi, l3_protocols)
 
-        kiss = KISSProtocol(port_config.port_id(), l2_queueing, port_config.get_boolean("kiss.checksum", False))
-        SerialDevice(kiss, port_config.get("serial.device"), port_config.get_int("serial.speed"), scheduler)
-        scheduler.submit(L2IOLoop(l2_queueing, l2))
+            kiss = KISSProtocol(port_config.port_id(), l2_queueing, port_config.get_boolean("kiss.checksum", False))
+            SerialDevice(kiss, port_config.get("serial.device"), port_config.get_int("serial.speed"), scheduler)
+            scheduler.submit(L2IOLoop(l2_queueing, l2))
 
     # Register L3 protocols
     routing_table = tarpn.netrom.router.NetRomRoutingTable.load(
@@ -98,9 +101,8 @@ def run_node(args):
     # netrom_l3 = NetRomL3(node_call, node_settings.node_alias(),
     #                      scheduler, l2_multi, routing_table)
 
-    mesh_address = MeshAddress.parse(s.network_configs().get("mesh.address"))
     l4_handlers = L4Handlers()
-    mesh_l3 = MeshProtocol(WallTime(), mesh_address, l2_multi, l4_handlers, scheduler)
+    mesh_l3 = MeshProtocol(WallTime(), s.network_configs(), l2_multi, l4_handlers, scheduler)
     # l3_protocols.register(netrom_l3)
     l3_protocols.register(NoLayer3Protocol())
     l3_protocols.register(mesh_l3)
@@ -122,15 +124,17 @@ def run_node(args):
 
     # TODO fix circular dependency here
     mesh_l4.broadcast_protocol = broadcast_protocol
+    mesh_l4.datagram_protocol = datagram_protocol
 
     # Bind the command processor
-    # ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), l2s=l2_multi, l3=netrom_l3,
-    #                       l4=netrom_l4, scheduler=scheduler)
-    # netrom_l4.bind_server(node_call, node_settings.node_alias(), ncp_factory)
+    ncp_factory = partial(NodeCommandProcessor, config=s.network_configs(), link=l2_multi, network=mesh_l3,
+                          transport_manager=mesh_l4, scheduler=scheduler)
+    mesh_l4.bind(ncp_factory, mesh_l3.our_address, 11)
 
     # Set up applications
     for app_config in s.app_configs():
         # We have a single unix socket connection multiplexed to many network connections
+        print(app_config)
         app_multiplexer = TransportMultiplexer()
         app_address = MeshTransportAddress.parse(app_config.get("app.address"))
         app_protocol = ApplicationProtocol(
@@ -141,8 +145,12 @@ def run_node(args):
             app_multiplexer)
         scheduler.submit(UnixServerThread(app_config.app_socket(), app_protocol))
         multiplexer_protocol = partial(MultiplexingProtocol, app_multiplexer)
-        mesh_l4.bind(multiplexer_protocol, app_address.address, app_address.port)
+        # TODO bind or connect?
+        mesh_l4.connect(multiplexer_protocol, app_address.address, MeshAddress.parse("00.a2"), app_address.port)
 
+    sock = node_settings.get("node.sock")
+    print(f"Binding node terminal to {sock}")
+    scheduler.submit(UnixServerThread(sock, TarpnShellProtocol(mesh_l3, mesh_l4)))
     # Start a metrics reporter
     #reporter = ConsoleReporter(reporting_interval=300)
     #scheduler.timer(10_000, reporter.start, True)

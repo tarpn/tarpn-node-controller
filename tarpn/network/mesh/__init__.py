@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from colorama import Fore, Style
+
 from tarpn.network import L3Address
 
 
@@ -11,10 +13,15 @@ class MeshAddress(L3Address):
     def id(self) -> int:
         return self._id
 
-    def __repr__(self):
+    def __str__(self):
         hi = (self._id >> 8) & 0xFF
         lo = self._id & 0xFF
         return f"{hi:02x}.{lo:02x}"
+
+    def __repr__(self):
+        hi = (self._id >> 8) & 0xFF
+        lo = self._id & 0xFF
+        return f"{Fore.BLUE}{hi:02x}.{lo:02x}{Style.RESET_ALL}"
 
     @classmethod
     def parse(cls, s: str):

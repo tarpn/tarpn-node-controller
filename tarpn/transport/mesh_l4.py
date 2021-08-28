@@ -6,11 +6,12 @@ from tarpn.crc import crc_b
 from tarpn.log import LoggingMixin
 from tarpn.network import L3Protocol, L3Address
 from tarpn.network.mesh import MeshAddress
-from tarpn.network.mesh.header import DatagramHeader, Datagram
+from tarpn.network.mesh.header import DatagramHeader, Datagram, BroadcastHeader
 from tarpn.transport.mesh.broadcast import BroadcastProtocol
 from tarpn.transport.mesh.datagram import DatagramProtocol
 from tarpn.transport import DatagramProtocol as DProtocol
 from tarpn.transport import DatagramTransport as DTransport
+from tarpn.transport import BroadcastTransport as BTransport
 from tarpn.transport import L4Protocol, Transport, L4Address
 
 
@@ -21,6 +22,9 @@ class MeshTransportAddress(L4Address):
 
     def network_address(self) -> MeshAddress:
         return self.address
+
+    def port_number(self) -> int:
+        return self.port
 
     def __repr__(self):
         return f"mesh://{self.address}:{self.port}"
@@ -40,13 +44,15 @@ class DatagramTransport(DTransport):
 
     def __init__(self,
                  network: L3Protocol,
-                 protocol: BroadcastProtocol,
+                 broadcast_protocol: BroadcastProtocol,
+                 datagram_protocol: DatagramProtocol,
                  port: int,
                  local: MeshAddress,
                  remote: Optional[MeshAddress]):
         Transport.__init__(self, extra={"peername": ("", port)})
         self.network = network
-        self.protocol = protocol
+        self.broadcast_protocol = broadcast_protocol
+        self.datagram_protocol = datagram_protocol
         self.port = port
         self.local = local
         self.remote = remote
@@ -76,11 +82,68 @@ class DatagramTransport(DTransport):
             else:
                 raise ValueError("DatagramTransport.write only supports bytes and strings")
             if len(encoded_data) <= mtu:
-                self.protocol.send_broadcast(self.port, encoded_data)
+                header = DatagramHeader(
+                    source=self.port,
+                    destination=self.port,
+                    length=len(encoded_data),
+                    checksum=crc_b(encoded_data)
+                )
+                self.datagram_protocol.send_datagram(self.local, self.remote, header, encoded_data)
+                #self.broadcast_protocol.send_broadcast(self.port, encoded_data)
             else:
                 raise RuntimeError(f"Message too large, maximum size is {mtu}")
         else:
-            raise RuntimeError(f"Cannot route to {MeshAddress(self.port)}!")
+            raise RuntimeError(f"Cannot route to {dest}!")
+
+    def get_write_buffer_size(self) -> int:
+        return 1000
+
+    def local_address(self) -> Optional[L3Address]:
+        return self.local
+
+    def remote_address(self) -> Optional[L3Address]:
+        return self.remote
+
+
+class BroadcastTransport(BTransport):
+    """
+        A channel for sending and receiving datagrams
+        """
+
+    def __init__(self,
+                 network: L3Protocol,
+                 broadcast_protocol: BroadcastProtocol,
+                 datagram_protocol: DatagramProtocol,
+                 port: int,
+                 local: MeshAddress,
+                 remote: Optional[MeshAddress]):
+        Transport.__init__(self, extra={"peername": ("", port)})
+        self.network = network
+        self.broadcast_protocol = broadcast_protocol
+        self.datagram_protocol = datagram_protocol
+        self.port = port
+        self.local = local
+        self.remote = remote
+        self.closing = False
+
+    def is_closing(self) -> bool:
+        return self.closing
+
+    def close(self) -> None:
+        self.closing = True
+
+    def write(self, data: Any) -> None:
+        _, mtu = self.network.route_packet(MeshAddress.parse("ff.ff"))
+        if isinstance(data, str):
+            encoded_data = data.encode("utf-8")
+        elif isinstance(data, (bytes, bytearray)):
+            encoded_data = data
+        else:
+            raise ValueError("DatagramTransport.write only supports bytes and strings")
+        if len(encoded_data) <= mtu:
+            self.broadcast_protocol.send_broadcast(self.port, encoded_data)
+        else:
+            raise RuntimeError(f"Message too large, maximum size is {mtu}")
 
     def get_write_buffer_size(self) -> int:
         return 1000
@@ -99,13 +162,14 @@ class MeshTransportManager(L4Protocol, LoggingMixin):
         self.connections: Dict[int, Tuple[Transport, DProtocol]] = dict()
         self.l3_protocol.register_transport_protocol(self)
         self.broadcast_protocol: Optional[BroadcastProtocol] = None
+        self.datagram_protocol: Optional[DatagramProtocol] = None
 
     def bind(self, protocol_factory: Callable[[], DProtocol],
              local_address: MeshAddress, port: int) -> DProtocol:
         if port in self.connections:
             raise RuntimeError(f"Connection to {port} is already open")
         protocol = protocol_factory()
-        transport = DatagramTransport(self.l3_protocol, self.broadcast_protocol, port, local_address, None)
+        transport = DatagramTransport(self.l3_protocol, self.broadcast_protocol, self.datagram_protocol, port, local_address, None)
         protocol.connection_made(transport)
         self.connections[port] = (transport, protocol)
         return protocol
@@ -113,9 +177,26 @@ class MeshTransportManager(L4Protocol, LoggingMixin):
     def connect(self, protocol_factory: Callable[[], DProtocol],
                 local_address: MeshAddress, remote_address: MeshAddress, port: int) -> DProtocol:
         if port in self.connections:
-            raise RuntimeError(f"Connection to {port} is already open")
+            if self.connections[port][0].is_closing():
+                del self.connections[port]
+            else:
+                raise RuntimeError(f"Connection to {port} is already open")
         protocol = protocol_factory()
-        transport = DatagramTransport(self.l3_protocol, self.broadcast_protocol, port, local_address, remote_address)
+        transport = DatagramTransport(self.l3_protocol, self.broadcast_protocol, self.datagram_protocol, port, local_address, remote_address)
+        protocol.connection_made(transport)
+        self.connections[port] = (transport, protocol)
+        return protocol
+
+    def broadcast(self, protocol_factory: Callable[[], DProtocol],
+                local_address: MeshAddress, port: int) -> DProtocol:
+        if port in self.connections:
+            if self.connections[port][0].is_closing():
+                del self.connections[port]
+            else:
+                raise RuntimeError(f"Connection to {port} is already open")
+        protocol = protocol_factory()
+        transport = BroadcastTransport(self.l3_protocol, self.broadcast_protocol, self.datagram_protocol, port,
+                                        local_address, MeshAddress.parse("ff.ff"))
         protocol.connection_made(transport)
         self.connections[port] = (transport, protocol)
         return protocol

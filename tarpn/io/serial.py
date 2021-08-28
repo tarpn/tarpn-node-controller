@@ -65,6 +65,7 @@ class SerialWriteLoop(SerialLoop, LoggingMixin):
             if to_write is not None and len(to_write) > 0:
                 try:
                     self.ser.write(to_write)
+                    self.ser.flush()
                     self.debug(f"Wrote {len(to_write)} bytes: {to_write}")
                     self.retry_backoff.reset()
                 except serial.SerialTimeoutException:
@@ -83,7 +84,7 @@ class SerialDevice(CloseableThreadLoop, LoggingMixin):
         self._scheduler = scheduler
         self._device_name = device_name
         self._protocol = protocol
-        self._ser = serial.Serial(port=None, baudrate=speed, timeout=0.200, write_timeout=0.200)
+        self._ser = serial.Serial(port=None, baudrate=speed, timeout=0.010, write_timeout=0.0100)
         self._ser.port = device_name
         self._closed_latch = CountDownLatch(2)
         self._open_event = threading.Event()
@@ -126,9 +127,9 @@ class SerialDevice(CloseableThreadLoop, LoggingMixin):
                 self.info(f"Opened serial port {self._device_name}")
                 self._open_event.set()
                 self._open_backoff.reset()
-            except serial.SerialException:
+            except serial.SerialException as err:
                 t = next(self._open_backoff)
-                self.warning(f"Failed to open serial port {self._device_name}, trying again in {t:0.3f}s")
+                self.warning(f"Failed to open serial port {self._device_name} with {err}, trying again in {t:0.3f}s")
                 sleep(t)
         else:
             sleep(1)

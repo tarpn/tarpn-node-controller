@@ -22,6 +22,9 @@ class NetRomCircuitAddress(L4Address):
     def network_address(self) -> NetRomAddress:
         return NetRomAddress(callsign=self.callsign, ssid=self.ssid)
 
+    def port_number(self) -> int:
+        return self.circuit
+
     def __str__(self):
         return f"netrom://{self.callsign}-{self.ssid}:{self.circuit}"
 
