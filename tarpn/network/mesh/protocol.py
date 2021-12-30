@@ -3,15 +3,13 @@ import enum
 import queue
 import threading
 import time
-import traceback
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import partial
 from io import BytesIO
 from typing import Tuple, List, Dict, Optional, Set, cast
 
 import networkx as nx
-from networkx import NetworkXNoPath, NetworkXException
+from networkx import NetworkXException
 
 from tarpn.datalink import L2Payload
 from tarpn.datalink.ax25_l2 import AX25Address
@@ -20,7 +18,7 @@ from tarpn.log import LoggingMixin
 from tarpn.network import L3Protocol, L3Address, L3Payload, QoS
 from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.header import Protocol, NetworkHeader, Header, HelloHeader, LinkStateHeader, \
-    LinkStateAdvertisementHeader, LinkStateQueryHeader, ControlHeader, ControlType, RecordHeader, RecordType
+    LinkStateAdvertisementHeader, LinkStateQueryHeader, ControlHeader, ControlType
 from tarpn.network.mesh.ping import PingProtocol
 from tarpn.scheduler import Scheduler, CloseableThreadLoop
 from tarpn.settings import NetworkConfig
@@ -194,24 +192,29 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         self.wakeup()
         CloseableThreadLoop.close(self)
 
-    def iter_loop(self):
+    def iter_loop(self) -> bool:
         # Check if we need to take some periodic action like sending a HELLO
-        now = datetime.utcnow()  # TODO use time.time_ns instead of datetime
-        deadline = min([
-            self.check_dead_neighbors(now),
-            self.check_hello(now),
-            self.check_epoch(now),
-            self.check_advert(now),
-            self.check_query(now)
-        ])
+        now = datetime.utcnow()
+        deadline = self.deadline(now)
 
         # Now wait at most the deadline for the next action for new incoming packets
         try:
             event = self.queue.get(block=True, timeout=deadline)
             if event is not None:
                 self.process_incoming(event)
+                return True
         except queue.Empty:
-            return
+            return False
+
+    def deadline(self, now: datetime) -> int:
+        # TODO use time.time_ns instead of datetime
+        return min([
+            self.check_dead_neighbors(now),
+            self.check_hello(now),
+            self.check_epoch(now),
+            self.check_advert(now),
+            self.check_query(now)
+        ])
 
     def wakeup(self):
         """Wake up the main thread"""
@@ -443,7 +446,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
     def generate_our_adverts(self) -> List[LinkStateHeader]:
         link_states = []
         for address in self.up_neighbors():
-            cost = self.link_multiplexer.get_link(self.neighbors.get(address).link_id).get_link_cost()
+            cost = self.link_multiplexer.get_link_cost(self.neighbors.get(address).link_id)
             link_states.append(LinkStateHeader(
                 node=address,
                 via=self.our_address,
@@ -452,8 +455,6 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         return link_states
 
     def send_advertisement(self):
-        self.debug("Sending Advertisement")
-
         link_states = self.generate_our_adverts()
 
         advertisement = LinkStateAdvertisementHeader(
@@ -462,6 +463,8 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             epoch=self.our_link_state_epoch,
             link_states=link_states
         )
+
+        self.debug("Sending Advertisement {}".format(advertisement))
 
         network_header = NetworkHeader(
             version=0,
@@ -588,7 +591,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         # Our links
         for neighbor in self.up_neighbors():
-            cost = self.link_multiplexer.get_link(self.neighbors.get(neighbor).link_id).get_link_cost()
+            cost = self.link_multiplexer.get_link_cost(self.neighbors.get(neighbor).link_id)
             g.add_weighted_edges_from([(self.our_address, neighbor, cost)])
         try:
             # Compute the shortest path

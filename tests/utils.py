@@ -176,3 +176,9 @@ class MockLinkMultiplexer(LinkMultiplexer):
 
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
         return None
+
+    def get_link_cost(self, link_id: int) -> int:
+        return 1
+
+    def get_link_device_id(self, link_id: int) -> int:
+        return -1

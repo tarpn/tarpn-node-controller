@@ -82,7 +82,13 @@ class L2Protocol:
 
 class LinkMultiplexer:
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
-        #  Only used to get device id from L2
+        #  TODO remove this
+        raise NotImplementedError
+
+    def get_link_device_id(self, link_id: int) -> int:
+        raise NotImplementedError
+
+    def get_link_cost(self, link_id: int) -> int:
         raise NotImplementedError
 
     def offer(self, payload: L3Payload):
@@ -129,6 +135,12 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
         return self.logical_links.get(link_id)
 
+    def get_link_cost(self, link_id: int) -> int:
+        return self.logical_links.get(link_id).get_link_cost()
+
+    def get_link_device_id(self, link_id: int) -> int:
+        return self.logical_links.get(link_id).get_device_id()
+
     def offer(self, payload: L3Payload) -> bool:
         l2 = self.logical_links.get(payload.link_id)
         if l2 is not None:
@@ -144,7 +156,7 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
                           exclude_device_with_link_id: Optional[int] = None) -> Iterator[int]:
         # Determine which device to exclude
         if exclude_device_with_link_id is not None:
-            exclude_device = self.get_link(exclude_device_with_link_id).get_device_id()
+            exclude_device = self.get_link_device_id(exclude_device_with_link_id)
         else:
             exclude_device = None
 
