@@ -25,7 +25,7 @@ class PingResult:
 
 @dataclasses.dataclass
 class PingStats:
-    results: deque[PingResult] = dataclasses.field(default_factory=partial(deque, maxlen=50))
+    results: deque = dataclasses.field(default_factory=partial(deque, maxlen=50))
 
     def get(self, seq) -> Optional[PingResult]:
         for result in reversed(self.results):

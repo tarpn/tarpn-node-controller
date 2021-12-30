@@ -57,16 +57,9 @@ class Neighbor:
     name: str
     link_id: int
     neighbors: List[MeshAddress]
+    last_seen: datetime
     last_update: datetime
     state: NeighborState
-
-
-@dataclasses.dataclass
-class LinkState:
-    local: MeshAddress
-    remote: MeshAddress
-    quality: int
-    last_update: datetime
 
 
 class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
@@ -226,7 +219,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             if neighbor.state == NeighborState.DOWN:
                 continue
 
-            deadline = self.config.get_int("mesh.dead.interval") - (now - neighbor.last_update).seconds
+            deadline = self.config.get_int("mesh.dead.interval") - (now - neighbor.last_seen).seconds
             if deadline <= 0:
                 self.info(f"Neighbor {neighbor.address} detected as DOWN!")
 
@@ -359,6 +352,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
     def handle_hello(self, link_id: int, network_header: NetworkHeader, hello: HelloHeader):
         self.debug(f"Handling hello {hello}")
+        now = datetime.utcnow()
         sender = network_header.source
         if network_header.source not in self.neighbors:
             self.info(f"Saw new neighbor {sender} ({hello.name})")
@@ -367,14 +361,15 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 name=hello.name,
                 link_id=link_id,
                 neighbors=hello.neighbors,
-                last_update=datetime.utcnow(),
+                last_seen=now,
+                last_update=now,
                 state=NeighborState.INIT
             )
             self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
-            self.last_epoch_bump = datetime.utcnow()
+            self.last_epoch_bump = now
         else:
             self.neighbors[sender].neighbors = hello.neighbors
-            self.neighbors[sender].last_update = datetime.utcnow()
+            self.neighbors[sender].last_seen = now
 
         if self.our_address in hello.neighbors:
             delay = 100
@@ -382,10 +377,12 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 self.info(f"Neighbor {sender} is UP!")
                 self.scheduler.timer(delay, partial(self.send_query, sender), auto_start=True)
                 self.neighbors[sender].state = NeighborState.UP
+                self.neighbors[sender].last_update = now
                 delay *= 1.2
         else:
             self.info(f"Neighbor {sender} is initializing...")
             self.neighbors[sender].state = NeighborState.INIT
+            self.neighbors[sender].last_update = now
 
     def send_hello(self):
         self.debug("Sending Hello")

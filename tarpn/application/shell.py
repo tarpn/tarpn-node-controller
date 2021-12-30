@@ -1,4 +1,3 @@
-import cmd
 import time
 from functools import partial
 from io import StringIO
@@ -123,7 +122,8 @@ class TarpnShell(cmd2.Cmd):
         self.stdout.write(f"Neighbors ({len(self.network.alive_neighbors())}):\r\n")
         for neighbor in self.network.neighbors.values():
             self.stdout.write(f"name={neighbor.name} address={neighbor.address} state={neighbor.state} "
-                              f"neighbors={neighbor.neighbors} last_update={neighbor.last_update}\r\n")
+                              f"neighbors={neighbor.neighbors} last_seen={neighbor.last_seen} "
+                              f"last_update={neighbor.last_update}\r\n")
 
     def do_links(self, *args):
         """Display link states in the network"""

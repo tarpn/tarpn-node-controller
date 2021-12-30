@@ -1,6 +1,7 @@
 import datetime
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import cast, Optional, Tuple
 
@@ -45,7 +46,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
         self.node_alias = node_alias
         self.link_multiplexer = link_multiplexer
         self.router = routing_table
-        self.nodes_timer = scheduler.timer(60000.0, self.broadcast_nodes)
+        self.nodes_timer = scheduler.timer(60_000, self.broadcast_nodes)
         self.netrom_transport = None
         self.nodes_lock = threading.Lock()
 
@@ -56,7 +57,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                 self.router.our_calls.add(cast(AX25Address, l2_address).to_ax25_call())
 
         now = datetime.datetime.now()
-        prune_intervals = round((now - self.router.updated_at).seconds / 60.000)
+        prune_intervals = round((now - self.router.updated_at).seconds / 300.000)
         if prune_intervals < 10:
             self.info(f"Pruning routes {prune_intervals} times")
             for i in range(prune_intervals):
@@ -65,8 +66,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
             self.info("Routes too old, discarding.")
             self.router.clear_routes()
 
-        self.nodes_timer.start()
-        self.broadcast_nodes()
+        scheduler.timer(30_000, self.broadcast_nodes, auto_start=True)
 
     def register_transport_protocol(self, l4_protocol: L4Protocol):
         # Only support NET/ROM
@@ -100,6 +100,9 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
             else:
                 self.error("NET/ROM only supports AX.25 L2")
         else:
+            if len(payload.l3_data) == 0:
+                packet_logger.info(f"DROP empty payload")
+                return
             netrom_packet = parse_netrom_packet(payload.l3_data)
 
             if isinstance(payload.source, AX25Address):
@@ -113,6 +116,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
                 dest_address = NetRomAddress(netrom_packet.dest.callsign, netrom_packet.dest.ssid)
                 link_to_route = self.router.route1(dest_address)
                 if link_to_route is not None:
+                    netrom_packet.ttl -= 1
                     l3_payload = L3Payload(source_address, dest_address,
                                            0xCF, netrom_packet.buffer, link_to_route, QoS.Default, True)
                     if self.link_multiplexer.offer(l3_payload):
@@ -156,6 +160,7 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
             self.counter("broadcast").inc()
             self.router.prune_routes()
             nodes = self.router.get_nodes()
+            self.debug(f"Sending NODES {nodes}")
             for l2 in self.link_multiplexer.l2_devices.values():
                 self.send_nodes_to_link(nodes, l2)
             # Reset the timer
@@ -168,8 +173,8 @@ class NetRomL3(L3Protocol, LoggingMixin, MetricsMixin):
             for chunk in nodes.to_chunks():
                 link_id = l2.maybe_open_link(AX25Address("NODES"))
                 payload = L3Payload(L3Address(), L3Address(), 0xCF, chunk, link_id, QoS.Lowest, reliable=False)
-                packet_logger.debug(f"TX: {payload}")
                 self.link_multiplexer.offer(payload)
+                time.sleep(1)
 
     def mtu(self) -> int:
         return self.link_multiplexer.mtu() - 22

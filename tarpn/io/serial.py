@@ -36,7 +36,7 @@ class SerialReadLoop(SerialLoop, LoggingMixin):
                               extra_func=partial(str, f"[Serial Reader {self.ser.name}]"))
 
     def iter_loop(self):
-        if self.open_event.wait():
+        if self.open_event.wait(3.0):
             try:
                 data = self.ser.read(1024)
                 if len(data) > 0:
@@ -57,7 +57,7 @@ class SerialWriteLoop(SerialLoop, LoggingMixin):
         self.retry_backoff = BackoffGenerator(0.100, 1.2, 1.000)
 
     def iter_loop(self):
-        if self.open_event.wait():
+        if self.open_event.wait(0.100):
             if len(self.unsent) > 0:
                 to_write = self.unsent.popleft()
             else:
@@ -68,23 +68,30 @@ class SerialWriteLoop(SerialLoop, LoggingMixin):
                     self.ser.flush()
                     self.debug(f"Wrote {len(to_write)} bytes: {to_write}")
                     self.retry_backoff.reset()
-                except serial.SerialTimeoutException:
+                except serial.SerialTimeoutException as e:
                     self.unsent.append(to_write)
-                    sleep(next(self.retry_backoff))
-                except serial.SerialException:
-                    self.exception("Failed to write bytes to serial device")
+                    t = next(self.retry_backoff)
+                    self.exception(f"Failed to write bytes to serial device, serial timed out. Retrying after {t}s.", e)
+                    sleep(t)
+                except serial.SerialException as e:
+                    self.exception("Failed to write bytes to serial device", e)
                     self.error_event.set()
 
 
 class SerialDevice(CloseableThreadLoop, LoggingMixin):
-    def __init__(self, protocol: IOProtocol, device_name, speed, scheduler: Scheduler):
+    def __init__(self,
+                 protocol: IOProtocol,
+                 device_name: str,
+                 speed: int,
+                 timeout: float,
+                 scheduler: Scheduler):
         LoggingMixin.__init__(self)
         CloseableThreadLoop.__init__(self, f"Serial Device {device_name}")
 
         self._scheduler = scheduler
         self._device_name = device_name
         self._protocol = protocol
-        self._ser = serial.Serial(port=None, baudrate=speed, timeout=0.010, write_timeout=0.0100)
+        self._ser = serial.Serial(port=None, baudrate=speed, timeout=timeout, write_timeout=timeout)
         self._ser.port = device_name
         self._closed_latch = CountDownLatch(2)
         self._open_event = threading.Event()

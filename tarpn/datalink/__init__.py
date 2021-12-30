@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from tarpn.log import LoggingMixin
 from tarpn.metrics import MetricsMixin
 
 
@@ -76,7 +77,7 @@ class L2IOQueuing:
         raise NotImplementedError
 
 
-class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin):
+class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin, LoggingMixin):
     """
     Pair of default L2 queues using FIFO queues, one inbound and one outbound.
 
@@ -91,6 +92,7 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin):
     so that when the upper layers catch up they have the most recent messages.
     """
     def __init__(self, queue_size, max_payload_size):
+        LoggingMixin.__init__(self)
         self._max_payload_size = max_payload_size
         self._outbound = queue.Queue(maxsize=queue_size)
 
@@ -104,6 +106,7 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin):
 
     def offer_outbound(self, frame: FrameData) -> bool:
         if len(frame.data) > self._max_payload_size:
+            self.error(f"Payload too large, dropping. Size is {len(frame.data)}, max is {self._max_payload_size}")
             # TODO indicate an error here
             self.counter("outbound", "mtu.error").inc()
             return False
@@ -114,6 +117,7 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin):
                 self._outbound.put(frame, False, None)
                 return True
             except queue.Full:
+                self.warning(f"Outbound queue is full.")
                 self.counter("outbound", "full").inc()
                 return False
 

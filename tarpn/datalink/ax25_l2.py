@@ -1,13 +1,13 @@
 import logging
 from copy import copy
 from dataclasses import dataclass, field
-from typing import Dict, cast
+from typing import Dict, cast, Callable, List, Set
 
 from tarpn.ax25 import decode_ax25_packet, AX25Call, AX25, AX25Packet, L3Protocol, AX25StateType
 from tarpn.ax25.statemachine import AX25StateMachine, AX25StateEvent
 from tarpn.datalink import L2Queuing, FrameData, L2Address, L2Payload
 from tarpn.datalink.protocol import L2Protocol, DefaultLinkMultiplexer
-from tarpn.network import L3Protocols, L3Payload, QoS
+from tarpn.network import L3Protocols, L3Payload, QoS, L3Address
 from tarpn.log import LoggingMixin
 from tarpn.scheduler import Scheduler
 from tarpn.settings import PortConfig
@@ -43,13 +43,16 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def __init__(self,
                  config: PortConfig,
                  link_port: int, link_call: AX25Call, scheduler: Scheduler, queue: L2Queuing,
-                 link_multiplexer: DefaultLinkMultiplexer, l3_protocols: L3Protocols):
+                 link_multiplexer: DefaultLinkMultiplexer, l3_protocols: L3Protocols,
+                 intercept_calls: Set[AX25Call], interceptor: Callable[[FrameData], None]):
         self.config = config
         self.link_port = link_port
         self.link_call = link_call
         self.queue = queue  # l2 buffer
         self.link_multiplexer = link_multiplexer
         self.l3_protocols = l3_protocols
+        self.intercept_calls = intercept_calls
+        self.interceptor = interceptor
 
         # Mapping of link_id to AX25 address. When we establish new logical links,
         # add them here so we can properly address payloads from L3
@@ -60,20 +63,24 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
         self.link_multiplexer.register_device(self)
 
         self.cq_timer = scheduler.timer(300_000, self._send_cq, True)
+        scheduler.timer(5_000, self.state_machine.start, True)
 
         def extra():
             return f"[L2 AX25 Port={self.link_port} Call={str(self.link_call)}]"
         LoggingMixin.__init__(self, extra_func=extra)
 
+    def __repr__(self):
+        return f"AX25Protocol(Port={self.link_port}, Call={str(self.link_call)})"
+
     @classmethod
     def maximum_transmission_unit(cls) -> int:
-        """I and UI frames have 16 header bytes"""
-        return 240
+        """AX.25 packets are limited to 256 bytes per the spec"""
+        return 256
 
     @classmethod
     def maximum_frame_size(cls) -> int:
-        """AX.25 packets are limited to 256 bytes per the spec"""
-        return 256
+        """I and UI frames have 16 header bytes"""
+        return 256 + 16
 
     def get_device_id(self) -> int:
         return self.link_port
@@ -94,17 +101,23 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
     def receive_frame(self, frame: FrameData):
         try:
             ax25_packet = decode_ax25_packet(frame.data)
-            self.maybe_open_link(AX25Address.from_ax25_call(ax25_packet.source))
-            if ax25_packet.dest == AX25Call("NODES"):
-                packet_logger.debug(f"[Port={self.link_port}] RX {len(ax25_packet.buffer)}: {ax25_packet}")
-            else:
-                packet_logger.info(f"[Port={self.link_port}] RX {len(ax25_packet.buffer)}: {ax25_packet}")
 
-                # TODO remove this probably
-                # Eagerly connect to neighbors sending NODES
-                # if self.state_machine.get_state(ax25_packet.source) in (AX25StateType.Disconnected,
-                #                                                         AX25StateType.AwaitingRelease):
-                #     self.dl_connect_request(copy(ax25_packet.source))
+            intercepted = ax25_packet.dest in self.intercept_calls
+            if intercepted:
+                log_prefix = f"[Port={self.link_port} UDP]"
+            else:
+                log_prefix = f"[Port={self.link_port}]"
+            if ax25_packet.dest == AX25Call("NODES"):
+                packet_logger.debug(f"{log_prefix} RX {len(ax25_packet.buffer)}: {ax25_packet}")
+            else:
+                packet_logger.info(f"{log_prefix} RX {len(ax25_packet.buffer)}: {ax25_packet}")
+
+            # Check for port forwarding
+            if intercepted:
+                self.interceptor(frame)
+                return
+
+            self.maybe_open_link(AX25Address.from_ax25_call(ax25_packet.source))
         except Exception:
             self.exception(f"Had error parsing packet: {frame}")
             return
@@ -112,12 +125,14 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
         try:
             self.state_machine.handle_packet(ax25_packet)
         except Exception:
+            self.state_machine.reset_state(ax25_packet.source)
             self.exception(f"Had error handling packet {ax25_packet}")
 
     def handle_queue_full(self):
         self.warning("L2 inbound queue is full!")
 
     def send_packet(self, payload: L3Payload) -> bool:
+        #print(f"Trying to send {payload}")
         remote_call = self.links_by_id.get(payload.link_id)
 
         if len(payload.buffer) > self.maximum_transmission_unit():
@@ -155,7 +170,7 @@ class AX25Protocol(L2Protocol, AX25, LoggingMixin):
         link_id = self.links_by_address.get(remote_call)
         if link_id is not None:
             pdu = L2Payload(link_id, AX25Address.from_ax25_call(remote_call),
-                            AX25Address.from_ax25_call(local_call), protocol, data)
+                            AX25Address.from_ax25_call(local_call), int(protocol), data)
             self.l3_protocols.handle_l2(pdu)
         else:
             self.warning(f"No logical link has been established for {remote_call}, dropping.")

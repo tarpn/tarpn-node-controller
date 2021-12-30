@@ -322,9 +322,10 @@ class IFrame(AX25Packet):
 class InternalInfo(AX25Packet):
     protocol: L3Protocol
     info: bytes
+    attempt: int = field(default=0)
 
     def __repr__(self):
-        return f"Pending IFrame(protocol={self.protocol} info={self.info})"
+        return f"Pending IFrame(protocol={self.protocol} info={self.info} attempt={self.attempt})"
 
     @classmethod
     def internal_info(cls, protocol: L3Protocol, info: bytes):
@@ -376,9 +377,11 @@ def decode_ax25_packet(buffer: bytes):
         info = bytes(byte_iter)
         recv_seq = (control_byte >> 5) & 0x07
         send_seq = (control_byte >> 1) & 0x07
+        iframe = IFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, send_seq, protocol, info)
         if next(byte_iter, None):
-            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
-        return IFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, send_seq, protocol, info)
+            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)} IFrame: {iframe}")
+        else:
+            return iframe
     elif (control_byte & 0x03) == 0x03:
         # U frame
         u_type = UnnumberedType.from_control_byte(control_byte)
@@ -386,20 +389,26 @@ def decode_ax25_packet(buffer: bytes):
             pid_byte = next(byte_iter)
             protocol = L3Protocol(pid_byte)
             info = bytes(byte_iter)
+            uiframe = UIFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type, protocol, info)
             if next(byte_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
-            return UIFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type, protocol, info)
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)} UIFrame: {uiframe}")
+            else:
+                return uiframe
         else:
+            uframe = UFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type)
             if next(byte_iter, None):
-                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
-            return UFrame(buffer, dest, source, repeaters, control_byte, poll_final, u_type)
+                raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)} UFrame: {uframe}")
+            else:
+                return uframe
     else:
         # S frame
         recv_seq = (control_byte & 0xE0) >> 5
         s_type = SupervisoryType.from_control_byte(control_byte)
+        sframe = SFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, s_type)
         if next(byte_iter, None):
-            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)}")
-        return SFrame(buffer, dest, source, repeaters, control_byte, poll_final, recv_seq, s_type)
+            raise BufferError(f"Underflow exception, did not expect any more bytes here. {str(buffer)} SFrame {sframe}")
+        else:
+            return sframe
 
 
 class AX25:
@@ -411,6 +420,7 @@ class AX25:
         "E": "DM received in states 3, 4 or 5",
         "F": "Data link reset; i.e., SABM received in state 3, 4 or 5",
         "G": "T1 retries exceeded",
+        "H": "T1 retries exceeded while disconnecting",
         "I": "N2 timeouts: unacknowledged data",
         "J": "N(r) sequence error",
         "L": "Control field invalid or not implemented",

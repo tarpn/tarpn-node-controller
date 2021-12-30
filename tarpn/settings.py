@@ -23,10 +23,7 @@ _default_settings = {
 
 _default_port_settings = {
     "port.enabled": True,
-    "datalink.ack.delay": 30,
-    "datalink.retry.count": 20,
-    "datalink.retry.timeout": 4000,
-    "datalink.idle.timeout": 180000
+    "serial.timeout": 0.100
 }
 
 
@@ -146,6 +143,14 @@ class Config(Mapping):
 
     def get_int(self, key, default: int = None) -> int:
         value = self._config_section.getint(key)
+        if value is None:
+            value = default
+        if value is None:
+            raise KeyError(f"Unknown key {key} in section {self._section}")
+        return value
+
+    def get_float(self, key, default: float = None) -> float:
+        value = self._config_section.getfloat(key)
         if value is None:
             value = default
         if value is None:

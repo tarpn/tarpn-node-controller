@@ -91,6 +91,9 @@ class LinkMultiplexer:
     def get_link_cost(self, link_id: int) -> int:
         raise NotImplementedError
 
+    def get_device(self, device_id: int) -> Optional[L2Protocol]:
+        raise NotImplementedError
+
     def offer(self, payload: L3Payload):
         raise NotImplementedError
 
@@ -134,6 +137,9 @@ class DefaultLinkMultiplexer(LinkMultiplexer):
 
     def get_link(self, link_id: int) -> Optional[L2Protocol]:
         return self.logical_links.get(link_id)
+
+    def get_device(self, device_id: int) -> Optional[L2Protocol]:
+        return self.l2_devices.get(device_id)
 
     def get_link_cost(self, link_id: int) -> int:
         return self.logical_links.get(link_id).get_link_cost()
@@ -206,6 +212,7 @@ class L2L3Driver(CloseableThreadLoop, LoggingMixin):
             while not sent and self.retry_backoff.total() < 20.000:
                 sleep(next(self.retry_backoff))
                 self.debug(f"Retrying send_packet {payload} to {self.l2}")
+                sent = self.l2.send_packet(payload)
             if not sent:
                 self.warning(f"Failed send_packet {payload} to {self.l2}")
             self.retry_backoff.reset()

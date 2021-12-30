@@ -1,10 +1,12 @@
 import datetime
+import logging
 import os
 from dataclasses import dataclass, field
 from operator import attrgetter
 from typing import List, Dict, Optional, cast, Set
 
 from tarpn.ax25 import AX25Call
+from tarpn.log import LoggingMixin
 from tarpn.netrom import NetRomPacket, NetRomNodes, NodeDestination
 from tarpn.network import L3RoutingTable, L3Address
 
@@ -89,6 +91,9 @@ class Destination:
         return sorted(self.neighbor_map.values(), key=attrgetter("quality"), reverse=True)
 
 
+logger = logging.getLogger("root")
+
+
 @dataclass
 class NetRomRoutingTable(L3RoutingTable):
     node_alias: str
@@ -124,7 +129,7 @@ class NetRomRoutingTable(L3RoutingTable):
             "node_alias": self.node_alias,
             "updated_at": self.updated_at.isoformat(),
             "our_calls": [str(call) for call in self.our_calls],
-            "neighbors": [n.to_safe_dict() for n in self.neighbors.values()],
+            "neighbors": [],
             "destinations": [d.to_safe_dict() for d in self.destinations.values()]
         }
         json_dump(filename, d)
@@ -158,19 +163,26 @@ class NetRomRoutingTable(L3RoutingTable):
 
     def route1(self, destination: L3Address) -> Optional[int]:
         if not isinstance(destination, l3.NetRomAddress):
-            print(f"Wrong address family, expected NET/ROM got {destination.__class__}")
+            logger.warning(f"Wrong address family, expected NET/ROM got {destination.__class__}")
             return None
         netrom_dest = cast(l3.NetRomAddress, destination)
         packet_dest = AX25Call(netrom_dest.callsign, netrom_dest.ssid)
         # TODO handle alias here
         if packet_dest in self.neighbors:
+            logger.debug(f"Routing to neighbor {packet_dest}")
             return self.neighbors.get(str(packet_dest)).port
         else:
             dest = self.destinations.get(str(packet_dest))
             if dest:
                 neighbors = dest.sorted_neighbors()
+                logger.debug(f"Sorted neighbors: {neighbors}")
                 if len(neighbors) > 0:
-                    return self.neighbors.get(str(neighbors[0].neighbor)).port
+                    neighbor = self.neighbors.get(str(neighbors[0].neighbor))
+                    if neighbor is not None:
+                        return neighbor.port
+                    else:
+                        logger.warning(f"Warning! Routed to dest {packet_dest} via {neighbors[0].neighbor}, "
+                                       f"but we have no entry for that neighbor!")
                 else:
                     return None
             else:
@@ -191,9 +203,9 @@ class NetRomRoutingTable(L3RoutingTable):
             if route is not None:
                 route.obsolescence = self.default_obs
             else:
-                print(f"Cannot refresh route to {node} via {heard_from}. {heard_from} is not in our neighbor map.")
+                logger.warning(f"Cannot refresh route to {node} via {heard_from}. {heard_from} is not in our neighbor map.")
         else:
-            print(f"Cannot refresh route to {node}. It is not in our destination map.")
+            logger.warning(f"Cannot refresh route to {node}. It is not in our destination map.")
 
     def update_routes(self, heard_from: AX25Call, heard_on_port: int, nodes: NetRomNodes):
         """
@@ -212,6 +224,11 @@ class NetRomRoutingTable(L3RoutingTable):
         self.destinations[str(heard_from)] = dest
 
         for destination in nodes.destinations:
+            logger.debug(f"Handling NODES dest {destination}")
+            dest_key = str(destination.dest_node)
+            if self.destinations.get(dest_key, Destination(AX25Call(), "")).freeze:
+                logger.debug(f"Skipping frozen destination {destination}")
+
             # Filter out ourselves
             route_quality = 0
             if destination.best_neighbor in self.our_calls:
@@ -223,18 +240,28 @@ class NetRomRoutingTable(L3RoutingTable):
 
             # Only add routes which are above the minimum quality to begin with TODO check this logic
             if route_quality > self.min_quality:
-                new_dest = self.destinations.get(str(destination.dest_node),
+                node_dest = self.destinations.get(dest_key,
                                                  Destination(destination.dest_node, destination.dest_alias))
-                new_route = new_dest.neighbor_map.get(
-                    str(neighbor.call), Route(neighbor.call, destination.dest_node, destination.best_neighbor,
-                                              int(route_quality), self.default_obs))
-                new_route.quality = route_quality
-                new_route.obsolescence = self.default_obs
-                new_dest.neighbor_map[str(neighbor.call)] = new_route
-                self.destinations[str(destination.dest_node)] = new_dest
+                node_route = node_dest.neighbor_map.get(str(neighbor.call))
+                if node_route is None:
+                    node_route = Route(neighbor.call, destination.dest_node, destination.best_neighbor,
+                                       int(route_quality), self.default_obs)
+                    node_route.quality = route_quality
+                    node_route.obsolescence = self.default_obs
+                    node_dest.neighbor_map[str(neighbor.call)] = node_route
+                    logger.debug(f"Added route {node_route} for {node_dest}")
+                else:
+                    if route_quality > node_route.quality:
+                        node_route.quality = route_quality
+                        node_route.obsolescence = self.default_obs
+                        node_dest.neighbor_map[str(neighbor.call)] = node_route
+                        logger.debug(f"Updated route {node_route} with quality={route_quality} for {node_dest}")
+                    else:
+                        node_route.obsolescence = self.default_obs
+                        logger.debug(f"Refreshed route {node_route} for {node_dest}")
+                self.destinations[dest_key] = node_dest
             else:
-                # print(f"Saw new route for {destination}, but quality was too low")
-                pass
+                logger.debug(f"Not updating {destination}, quality {route_quality} was too low")
         self.updated_at = datetime.datetime.now()
 
     def prune_routes(self) -> None:
@@ -243,25 +270,27 @@ class NetRomRoutingTable(L3RoutingTable):
 
         This method is not thread-safe.
         """
-        # print("Pruning routes")
+        logger.debug("Pruning routes")
         for call, destination in list(self.destinations.items()):
             if destination.freeze:
-                # Don't prune frozen routes
+                logger.debug(f"Skipping frozen route {destination}")
                 continue
             for neighbor, route in list(destination.neighbor_map.items()):
                 route.obsolescence -= 1
                 if route.obsolescence <= 0:
-                    # print(f"Removing {neighbor} from {destination} neighbor's list")
+                    logger.debug(f"Removing {neighbor} from {destination} neighbor's list")
                     del destination.neighbor_map[neighbor]
             if len(destination.neighbor_map.keys()) == 0:
-                # print(f"No more routes to {call}, removing from routing table")
+                logging.debug(f"No more routes to {call}, removing from routing table")
                 del self.destinations[call]
                 if call in self.neighbors.keys():
                     del self.neighbors[call]
         self.updated_at = datetime.datetime.now()
 
     def clear_routes(self) -> None:
-        self.destinations.clear()
+        for dest_key in list(self.destinations.keys()):
+            if not self.destinations[dest_key].freeze:
+                del self.destinations[dest_key]
         self.neighbors.clear()
         self.updated_at = datetime.datetime.now()
 

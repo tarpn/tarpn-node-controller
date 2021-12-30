@@ -2,6 +2,8 @@
 AX.25 State Machine Code
 """
 import asyncio
+import threading
+import time
 from asyncio import Future
 import queue
 from dataclasses import dataclass, field
@@ -13,6 +15,7 @@ from typing import Callable, cast, Dict, Optional, List, Tuple
 from tarpn.ax25 import AX25Call, AX25Packet, IFrame, SFrame, SupervisoryType, UFrame, UnnumberedType, UIFrame, \
     L3Protocol, InternalInfo, SupervisoryCommand, DummyPacket, AX25, AX25StateType
 from tarpn.log import LoggingMixin
+from tarpn.scheduler import CloseableThreadLoop
 from tarpn.util import AsyncioTimer, between, Timer
 
 
@@ -194,13 +197,14 @@ class AX25State:
     futures: Dict[int, Future] = field(default_factory=dict, repr=False)
 
     def log_prefix(self):
-        return f"AX25 [Id={self.session_id} Local={self.local_call} Remote={self.remote_call} State={self.current_state}]"
+        return f"AX25 [Local={self.local_call} Remote={self.remote_call} State={self.current_state} " \
+               f"V(S)={self.get_send_state()} V(R)={self.get_recv_state()} V(A)={self.get_ack_state()}]"
 
     @classmethod
     def create(cls,
                remote_call: AX25Call,
                local_call: AX25Call,
-               internal_event_cb: Callable[[AX25StateEvent], None],
+               internal_event_cb: Callable[[AX25StateEvent], bool],
                timer_factory: Callable[[float, Callable[[], None]], Timer]):
 
         def async_callback(event: AX25StateEvent) -> None:
@@ -267,11 +271,10 @@ class AX25State:
         self.vr += 1
 
     def get_ack_state(self):
-        return self.va & 0xFF
+        return self.va & 0x0F
 
-    def set_ack_state(self, va):
-        #self.print_window()
-        self.va = va & 0xFF
+    def set_ack_state(self, va: int):
+        self.va = va & 0x0F
 
     def print_window(self):
         print(f"{self.local_call} V(A)={self.get_ack_state()} V(R)={self.get_recv_state()} V(S)={self.get_send_state()}"
@@ -337,7 +340,7 @@ def select_t1_value(state: AX25State):
 
 def check_iframe_ack(state: AX25State, nr: int):
     if nr == state.get_send_state():
-        state.set_ack_state(nr & 0xFF)
+        state.set_ack_state(nr & 0x0F)
         vs = (nr + 7) % 8
         fut = state.futures.get(vs)
         if fut and not fut.done():
@@ -346,7 +349,7 @@ def check_iframe_ack(state: AX25State, nr: int):
         state.t3.start()
         select_t1_value(state)
     elif nr != state.get_ack_state():
-        state.set_ack_state(nr & 0xFF)
+        state.set_ack_state(nr & 0x0F)
         vs = (nr + 7) % 8
         fut = state.futures.get(vs)
         if fut and not fut.done():
@@ -365,6 +368,11 @@ def check_need_for_response(state: AX25State, ax25: AX25, s_frame: SFrame):
     elif s_frame.get_command() == SupervisoryCommand.Response and s_frame.poll_final:
         ax25.dl_error(state.remote_call, state.local_call, "A")
 
+# v(a) = 3
+# nr = 3
+# v(s) = 3
+
+# v(a) <= n(r) <= v(s)
 
 def check_nr(state: AX25State, nr: int):
     if state.get_send_state() < state.get_ack_state():
@@ -381,14 +389,17 @@ def nr_error_recovery(state: AX25State, ax25: AX25):
     state.layer_3 = False
 
 
-def invoke_retransmission(state: AX25State, ax25: AX25):
+def invoke_retransmission(state: AX25State, ax25: AX25, nr: int):
     x = state.get_send_state()
-    vs = state.get_recv_state()
+    state.set_send_state(nr + 1)
+    vs = state.get_send_state()
     while vs != x:
         old_frame = state.sent_frames[vs]
         old_future = state.futures[vs]
         state.push_iframe(InternalInfo.internal_info(old_frame.protocol, old_frame.info), old_future)
-        vs += 1
+        #state.inc_send_state()
+        #vs = state.get_send_state()
+        vs = (vs + 1) % 8
 
 
 def disconnected_handler(
@@ -462,7 +473,7 @@ def disconnected_handler(
         ax25.write_packet(dm_response)
         return AX25StateType.Disconnected
     else:
-        logger.debug(f"Ignoring {event}")
+        logger.info(f"Ignoring {event}")
         return AX25StateType.Disconnected
 
 
@@ -569,7 +580,7 @@ def awaiting_connection_handler(
         state.layer_3 = True
         return AX25StateType.AwaitingConnection
     else:
-        logger.debug(f"Ignoring {event}")
+        logger.info(f"Ignoring {event}")
         return AX25StateType.AwaitingConnection
 
 
@@ -601,9 +612,13 @@ def connected_handler(
         (pending, future) = cast(InternalInfo, state.pending_frames.get())
         logger.debug(f"Pending iframe: {pending}")
         if state.window_exceeded():
-            logger.debug(f"Window exceeded, delaying frame")
+            logger.info(f"Window exceeded, delaying frame")
+            if pending.attempt > 5:
+                logger.info(f"Dropping frame {pending}, too many delays")
+            pending.attempt += 1
             #asyncio.create_task(delay_outgoing_data(state, pending, future))
             state.push_iframe(pending, future)
+            time.sleep(0.500)
         else:
             i_frame = IFrame.i_frame(
                 dest=state.remote_call,
@@ -691,8 +706,8 @@ def connected_handler(
             check_iframe_ack(state, s_frame.receive_seq_number)
             return AX25StateType.Connected
         else:
-            logger.warning(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={s_frame.receive_seq_number} "
-                           f"V(S)={state.get_send_state()}")
+            logger.info(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={s_frame.receive_seq_number} "
+                        f"V(S)={state.get_send_state()}")
             nr_error_recovery(state, ax25)
             return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_INFO:
@@ -720,8 +735,8 @@ def connected_handler(
                         ax25.write_packet(rej)
                 return AX25StateType.Connected
             else:
-                logger.warning(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={i_frame.receive_seq_number} "
-                               f"V(S)={state.get_send_state()}")
+                logger.info(f"N(R) error recovery, V(A)={state.get_ack_state()} N(R)={i_frame.receive_seq_number} "
+                            f"V(S)={state.get_send_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:
@@ -733,7 +748,7 @@ def connected_handler(
         state.layer_3 = True
         return AX25StateType.Connected
     else:
-        logger.debug(f"Ignoring {event}")
+        logger.info(f"Ignoring {event}")
         return AX25StateType.Connected
 
 
@@ -763,9 +778,13 @@ def timer_recovery_handler(
     elif event.event_type == AX25EventType.IFRAME_READY:
         pending, future = state.pending_frames.get()
         if state.window_exceeded():
-            logger.debug("Window exceeded, delaying frame")
+            logger.info("Window exceeded, delaying frame")
             #asyncio.ensure_future(delay_outgoing_data(state, pending, future))
+            if pending.attempt > 5:
+                logger.info(f"Dropping frame {pending}, too many delays")
+            pending.attempt += 1
             state.push_iframe(pending, future)
+            time.sleep(0.500)
         else:
             i_frame = IFrame.i_frame(state.remote_call, state.local_call, [], SupervisoryCommand.Command, False,
                                      state.get_recv_state(), state.get_send_state(), pending.protocol, pending.info)
@@ -785,7 +804,7 @@ def timer_recovery_handler(
             transmit_enquiry(state, ax25)
             return AX25StateType.TimerRecovery
         else:
-            logger.debug("datalink retries exceeded, disconnecting")
+            logger.info("datalink retries exceeded, disconnecting")
             if state.get_ack_state() == state.get_send_state():
                 ax25.dl_error(state.remote_call, state.local_call, "U")
             else:
@@ -838,27 +857,28 @@ def timer_recovery_handler(
                 state.set_ack_state(s_frame.receive_seq_number)
                 if state.get_send_state() == state.get_ack_state():
                     state.t3.start()
-                    logger.debug("Re-connected")
+                    logger.info("Re-connected")
                     return AX25StateType.Connected
                 else:
-                    logger.debug(f"Invoke retransmission, N(R)={state.get_recv_state()}")
-                    invoke_retransmission(state, ax25)
-                    return AX25StateType.TimerRecovery
+                    #logger.info(f"Invoke retransmission, N(R)={s_frame.receive_seq_number}")
+                    #invoke_retransmission(state, ax25, s_frame.receive_seq_number)
+                    logger.info(f"N(R) error recovery, N(R)={s_frame.receive_seq_number}")
+                    nr_error_recovery(state, ax25)
+                    return AX25StateType.AwaitingConnection
             else:
-                logger.warning(f"N(R) error recovery, V(S)={state.get_send_state()} N(R)={s_frame.receive_seq_number} "
-                               f"V(A)={state.get_ack_state()}")
+                logger.info(f"N(R) error recovery, N(R)={s_frame.receive_seq_number}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
         else:
             if s_frame.get_command() == SupervisoryCommand.Command and s_frame.poll_final:
                 enquiry_response(state, ax25)
-            if check_nr(state, state.get_recv_state()):
+            if check_nr(state, s_frame.receive_seq_number):
                 state.set_ack_state(s_frame.receive_seq_number)
-                logger.debug("Still in timer recovery")
-                return AX25StateType.TimerRecovery
+                logger.info("Leaving timer recovery even though command and P=1")
+                return AX25StateType.Connected
             else:
-                logger.warning(f"N(R) error recovery, V(S)={state.get_send_state()} V(R)={state.get_recv_state()} "
-                               f"V(A)={state.get_ack_state()}")
+                logger.info(f"N(R) error recovery, V(S)={state.get_send_state()} V(R)={state.get_recv_state()} "
+                            f"V(A)={state.get_ack_state()}")
                 nr_error_recovery(state, ax25)
                 return AX25StateType.AwaitingConnection
     elif event.event_type == AX25EventType.AX25_DISC:
@@ -1056,15 +1076,16 @@ class DeferredAX25(AX25):
         return len(self.calls)
 
 
-class AX25StateMachine:
+class AX25StateMachine(CloseableThreadLoop):
     """State management for AX.25 Data Links
 
     Holds a mapping of AX.25 sessions keyed on remote callsign.
 
     """
     def __init__(self, ax25: AX25, timer_factory: Callable[[float, Callable[[], None]], Timer]):
+        CloseableThreadLoop.__init__(self, name="AX25StateMachine")
         self._ax25 = ax25
-        self._sessions: Dict[Tuple[AX25Call, AX25Call], AX25State] = {}  # (remote, local)
+        self._sessions: Dict[Tuple[AX25Call, AX25Call], AX25State] = {}  # (remote, local) -> state
         self._handlers = {
             AX25StateType.Disconnected: disconnected_handler,
             AX25StateType.Connected: connected_handler,
@@ -1074,6 +1095,7 @@ class AX25StateMachine:
         }
         self._timer_factory = timer_factory
         self._logger = logging.getLogger("ax25.state")
+        self.queue = queue.Queue()
 
     def log(self, state: AX25State, msg: str, *args, **kwargs):
         self._logger.info(f"[Id={state.session_id} Local={state.local_call} Remote={state.remote_call} "
@@ -1098,28 +1120,30 @@ class AX25StateMachine:
         else:
             return state.current_state
 
+    def reset_state(self, remote_call: AX25Call) -> None:
+        local_call = self._ax25.local_call()
+        state = self._sessions.get((remote_call, local_call))
+        if state is not None:
+            state.reset()
+
     def is_window_exceeded(self, remote_call: AX25Call) -> bool:
         local_call = self._ax25.local_call()
         state = self._sessions.get((remote_call, local_call))
         if state is None:
             return False
+        elif state.window_exceeded():
+            logger = LoggingMixin(self._logger, state.log_prefix)
+            logger.debug(f"Window exceeded!")
+            return True
         else:
-            return state.window_exceeded()
+            return False
 
     def handle_packet(self, packet: AX25Packet):
         state = self._get_or_create_session(packet.source, packet.dest)
         event = AX25StateEvent.from_packet(packet)
-        handler = self._handlers[state.current_state]
-        if handler is None:
-            raise RuntimeError(f"No handler for {handler}")
-        deferred = DeferredAX25(self._ax25)
-        logger = LoggingMixin(self._logger, state.log_prefix)
-        new_state = handler(state, event, deferred, logger)
-        state.current_state = new_state
-        logger.debug(f"Handled {event}")
-        deferred.apply()
+        self.queue.put((event, state))
 
-    def handle_internal_event(self, event: AX25StateEvent) -> bool:
+    def handle_internal_event(self, event: AX25StateEvent):
         if event.event_type in (AX25EventType.DL_CONNECT, AX25EventType.DL_UNIT_DATA):
             #  allow these events to create a new session
             state = self._get_or_create_session(event.remote_call, self._ax25.local_call())
@@ -1128,13 +1152,25 @@ class AX25StateMachine:
             state = self._sessions.get((event.remote_call, local_call))
         if not state:
             raise RuntimeError(f"No session for internal event {event}")
-        handler = self._handlers[state.current_state]
-        if handler is None:
-            raise RuntimeError(f"No handler for {handler}")
-        deferred = DeferredAX25(self._ax25)
-        logger = LoggingMixin(self._logger, state.log_prefix)
-        new_state = handler(state, event, deferred, logger)
-        state.current_state = new_state
-        logger.debug(f"Handled {event}")
-        deferred.apply()
-        return state.window_exceeded()
+        self.queue.put((event, state))
+
+    def iter_loop(self):
+        try:
+            event, state = self.queue.get(block=True, timeout=1.000)
+            if event is not None:
+                deferred = DeferredAX25(self._ax25)
+                logger = LoggingMixin(self._logger, state.log_prefix)
+                if event.event_type in (AX25EventType.AX25_UI, AX25EventType.DL_UNIT_DATA):
+                    logger.debug(f"Before {event}")
+                else:
+                    logger.info(f"Before {event}")
+                handler = self._handlers[state.current_state]
+                new_state = handler(state, event, deferred, logger)
+                state.current_state = new_state
+                if event.event_type in (AX25EventType.AX25_UI, AX25EventType.DL_UNIT_DATA):
+                    logger.debug(f"After {event}")
+                else:
+                    logger.info(f"After {event}")
+                deferred.apply()
+        except queue.Empty:
+            return

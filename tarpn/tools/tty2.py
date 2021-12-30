@@ -105,7 +105,11 @@ def main():
     l2 = AX25Protocol(port_config, port_config.port_id(), AX25Call.parse(args.local_call), scheduler,
                       l2_queueing, l2_multi, l3_protocols)
     kiss = KISSProtocol(port_config.port_id(), l2_queueing, port_config.get_boolean("kiss.checksum", False))
-    SerialDevice(kiss, port_config.get("serial.device"), port_config.get_int("serial.speed"), scheduler)
+    SerialDevice(kiss,
+                 port_config.get("serial.device"),
+                 port_config.get_int("serial.speed"),
+                 port_config.get_float("serial.timeout"),
+                 scheduler)
     scheduler.submit(L2IOLoop(l2_queueing, l2))
 
     # Initialize L3 and L4
