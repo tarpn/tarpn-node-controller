@@ -5,7 +5,7 @@ name: Build
 
 on:
   push:
-    paths-ignore: 'README.md'
+    paths-ignore: ['README.md']
     branches: [ master ]
     tags:
       - 'v*.*.*'
@@ -16,8 +16,6 @@ jobs:
   build:
 
     runs-on: [self-hosted, arm]
-    strategy:
-      fail-fast: false
 
     steps:
     - name: Clean working directory
