@@ -47,7 +47,7 @@ jobs:
         echo "Installing wheel into empty virtualenv"
         python3.7 -m virtualenv ${SERVICE_UNIT_NAME}
         ${SERVICE_UNIT_NAME}/bin/pip install dist/*.whl
-        test -f ${SERVICE_UNIT_NAME}/bin/tarpn-node || (echo "tarpn-core was not installed!"; find ${SERVICE_UNIT_NAME})
+        test -f ${SERVICE_UNIT_NAME}/bin/tarpn-node || (echo "tarpn-core was not installed!"; find ${SERVICE_UNIT_NAME}; exit 1)
 
         echo "Patching service unit"
         cat scripts/tarpn-core.service
@@ -62,15 +62,19 @@ jobs:
         echo "Installing service"
         loginctl enable-linger pi
         sleep 1
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload              || echo "Failed to reload systemctl"
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME  || echo "Failed to enable service"
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME   || echo "Failed to start service"
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME  || echo "Failed to get service status"
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to stop service"
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME
+        sleep 1
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt
+        grep -i started status.txt  || (echo "Service didn't start; exit 1)
+        test -f ${SERVICE_UNIT_NAME}/config/node.ini || (echo "Should have bootstrapped default config file node.ini; exit 1)
+        grep -i callsign status.txt || (echo "Should have failed with default config; exit 1)
         sleep 1
     - name: Cleanup install
       if: always()
       run: |
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to disable service"
         rm -f ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
     - name: Release
       uses: softprops/action-gh-release@v1
