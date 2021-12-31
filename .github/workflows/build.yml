@@ -52,15 +52,18 @@ jobs:
         echo ${SERVICE_UNIT_NAME}
         echo ${INSTALL_DIR}
         sed -i "s|/opt/tarpn-core|${INSTALL_DIR}|g" scripts/tarpn-core.service || echo "failed to patch service file"
-        echo "Patched service unit"; cat scripts/tarpn-core.service
+        echo "Patched service unit:"; cat scripts/tarpn-core.service
         mkdir -p ~/.config/systemd/user/
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
         echo "Installing service"
-        systemctl --user daemon-reload              || echo "Failed to reload systemctl"
-        systemctl --user enable $SERVICE_UNIT_NAME  || echo "Failed to enable service"
-        systemctl --user start $SERVICE_UNIT_NAME   || echo "Failed to start service"
-        systemctl --user status $SERVICE_UNIT_NAME  || echo "Failed to get service status"
-        systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to stop service"
+        loginctl enable-linger runner
+        sleep 1
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload              || echo "Failed to reload systemctl"
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME  || echo "Failed to enable service"
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME   || echo "Failed to start service"
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME  || echo "Failed to get service status"
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to stop service"
+        sleep 1
     - name: Cleanup install
       if: always()
       run: |
