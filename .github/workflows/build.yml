@@ -56,10 +56,11 @@ jobs:
         mkdir -p ~/.config/systemd/user/
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
         echo "Installing service"
-        systemctl --user daemon-reload
-        systemctl --user enable --now $SERVICE_UNIT_NAME
-        systemctl --user status $SERVICE_UNIT_NAME
-        systemctl --user disable $SERVICE_UNIT_NAME
+        systemctl --user daemon-reload              || echo "Failed to reload systemctl"
+        systemctl --user enable $SERVICE_UNIT_NAME  || echo "Failed to enable service"
+        systemctl --user start $SERVICE_UNIT_NAME   || echo "Failed to start service"
+        systemctl --user status $SERVICE_UNIT_NAME  || echo "Failed to get service status"
+        systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to stop service"
     - name: Cleanup install
       if: always()
       run: |
