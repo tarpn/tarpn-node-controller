@@ -56,7 +56,7 @@ jobs:
         mkdir -p ~/.config/systemd/user/
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
         echo "Installing service"
-        loginctl enable-linger runner
+        loginctl enable-linger pi
         sleep 1
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload              || echo "Failed to reload systemctl"
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME  || echo "Failed to enable service"
