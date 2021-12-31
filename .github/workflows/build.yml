@@ -41,18 +41,23 @@ jobs:
       with:
         name: dist
         path: dist
-    - name: Test systemd unit
+    - name: Install package and systemd unit
       env:
         SERVICE_UNIT_NAME: 'tarpn-core-${{ github.sha }}-${{ github.run_id }}'
       run: |
+        python3.7 -m virtualenv ${SERVICE_UNIT_NAME}
+        ./${SERVICE_UNIT_NAME}/bin/pip install dist/*.whl
+        test -f ./${SERVICE_UNIT_NAME}/bin/tarpn-core || echo "tarpn-core was not installed!"
         mkdir -p ~/.config/systemd/user/
-        ${{ github.sha }} ${{ github.run_id }}
+        export INSTALL_DIR=$(readlink -f ${SERVICE_UNIT_NAME})
+        sed -i "s/\/opt\/tarpn-core/${INSTALL_DIR}/g" scripts/tarpn-core.service
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
         systemctl --user daemon-reload
         systemctl --user enable --now $SERVICE_UNIT_NAME
         systemctl --user status $SERVICE_UNIT_NAME
         systemctl --user disable $SERVICE_UNIT_NAME
         rm -f ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
+        rm -f /opt/${SERVICE_UNIT_NAME}
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
