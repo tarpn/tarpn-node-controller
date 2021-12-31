@@ -44,20 +44,11 @@ jobs:
         path: dist
     - name: Install package and systemd unit
       run: |
-        bats scripts/test-install.bats
-        echo "Installing wheel into empty virtualenv"
-        python3.7 -m virtualenv ${SERVICE_UNIT_NAME}
-        ${SERVICE_UNIT_NAME}/bin/pip install dist/*.whl
-        test -f ${SERVICE_UNIT_NAME}/bin/tarpn-node || (echo "tarpn-core was not installed!"; find ${SERVICE_UNIT_NAME}; exit 1)
+        mkdir -p ~/.config/systemd/user/
 
-        echo "Patching service unit"
-        cat scripts/tarpn-core.service
-        export INSTALL_DIR=$(readlink -f ${SERVICE_UNIT_NAME})
-        sed -i "s|/opt/tarpn-core|${INSTALL_DIR}|g" scripts/tarpn-core.service
-        sed -i "/^User=/d" scripts/tarpn-core.service
+        bats -p scripts/test-install.bats
 
         echo "Patched service unit:"; cat scripts/tarpn-core.service
-        mkdir -p ~/.config/systemd/user/
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
 
         echo "Installing service"
