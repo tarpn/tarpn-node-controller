@@ -41,6 +41,18 @@ jobs:
       with:
         name: dist
         path: dist
+    - name: Test systemd unit
+      env:
+        SERVICE_UNIT_NAME: 'tarpn-core-${{ github.sha }}-${{ github.run_id }}'
+      run: |
+        mkdir -p ~/.config/systemd/user/
+        ${{ github.sha }} ${{ github.run_id }}
+        cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
+        systemctl --user daemon-reload
+        systemctl --user enable --now $SERVICE_UNIT_NAME
+        systemctl --user status $SERVICE_UNIT_NAME
+        systemctl --user disable $SERVICE_UNIT_NAME
+        rm -f ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
