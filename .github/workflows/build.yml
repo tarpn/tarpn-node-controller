@@ -51,7 +51,7 @@ jobs:
         cat scripts/tarpn-core.service
         echo ${SERVICE_UNIT_NAME}
         echo ${INSTALL_DIR}
-        sed -i "s|/opt/tarpn-core|${INSTALL_DIR}|g" scripts/tarpn-core.service
+        sed -i "s|/opt/tarpn-core|${INSTALL_DIR}|g" scripts/tarpn-core.service || echo "failed to patch service file"
         echo "Patched service unit"; cat scripts/tarpn-core.service
         mkdir -p ~/.config/systemd/user/
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
