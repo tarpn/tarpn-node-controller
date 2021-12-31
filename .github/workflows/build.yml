@@ -46,7 +46,7 @@ jobs:
       run: |
         mkdir -p ~/.config/systemd/user/
 
-        bats -p scripts/test-install.bats
+        bats -t scripts/test-install.bats
 
         echo "Patched service unit:"; cat scripts/tarpn-core.service
         cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
