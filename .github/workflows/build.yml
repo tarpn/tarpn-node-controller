@@ -59,8 +59,8 @@ jobs:
         loginctl enable-linger pi
         sleep 1
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME || (echo "Failed to enable service"; exit 1)
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME || (echo "Failed to start service"; exit 1)
         sleep 3
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt
         grep -i started status.txt  || (echo "Service didn't start"; exit 1)
