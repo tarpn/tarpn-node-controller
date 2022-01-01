@@ -61,9 +61,8 @@ jobs:
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME || (echo "Failed to enable service"; exit 1)
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME || (echo "Failed to start service"; exit 1)
-        sleep 3
-        echo "status"
-        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt || (echo "status failed")
+        sleep 5
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt || exit 0
         grep -i started status.txt  || (echo "Service didn't start"; exit 1)
         test -f ${SERVICE_UNIT_NAME}/config/node.ini || (echo "Should have bootstrapped default config file node.ini"; exit 1)
         grep -i callsign status.txt || (echo "Should have failed with default config"; exit 1)
