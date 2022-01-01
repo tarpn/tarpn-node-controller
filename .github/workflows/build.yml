@@ -63,6 +63,7 @@ jobs:
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME || (echo "Failed to start service"; exit 1)
         sleep 1
         echo "status"
+        sleep 3
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt
         grep -i started status.txt  || (echo "Service didn't start"; exit 1)
         test -f ${SERVICE_UNIT_NAME}/config/node.ini || (echo "Should have bootstrapped default config file node.ini"; exit 1)
