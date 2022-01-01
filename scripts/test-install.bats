@@ -9,6 +9,4 @@
     run sed -i "s|/opt/tarpn-core|${INSTALL_DIR}|g" scripts/tarpn-core.service
     run sed -i "/^User=/d" scripts/tarpn-core.service
     run cat scripts/tarpn-core.service
-    refute_output 'opt'
-    refute_output 'User'
 }
