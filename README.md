@@ -24,28 +24,31 @@ brew install python3
 pip3 install virtualenv
 ```
 
-## Install the software
+## Install the software (RPi)
 
-Create a Python environment with Python 3.7+ and enter it
+Create an installation directory under opt and install a Python environment into it
+
+_These instructions assume an installation directory of /opt/tarpn. However, the software can be installed at any location
 
 ```shell
-python3 -m virtualenv ~/tarpn-env; cd ~/tarpn-env
+sudo mkdir /opt/tarpn-core
+sudo chown pi:pi /opt/tarpn-core
+python3 -m virtualenv /opt/tarpn-core
+cd /opt/tarpn-core
 ```
-
-_All further steps in this section assume you are in the ~/tarpn-env directory_
 
 Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
 
-```sh
-./bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.2/tarpn_core-0.1.2-py3-none-any.whl
+```shell
+/opt/tarpn-core/bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.2/tarpn_core-0.1.2-py3-none-any.whl
 ```
 
 ## Configuration
 
-A sample config file is included at `config/node.ini.sample`. Copy it to `config/node.ini` upon startup.
+A sample config file is included at `/opt/tarpn-core/config/node.ini.sample`. Make a copy of it at `/opt/tarpn-core/config/node.ini`
 
 ```shell
-cp config/node.ini.sample config/node.ini
+cp /opt/tarpn-core/config/node.ini.sample /opt/tarpn-core/config/node.ini
 ```
 
 Edit this file and, at a minimum, set `mycall`, `node.alias`, and `node.locator`.
@@ -75,18 +78,30 @@ serial.speed = 57600
 mesh.address = 00.aa
 ```
 
+## Systemd service (optional)
+
+Install the systemd service file. This assumes that you've configured tarpn-node
+
+```shell
+wget https://raw.githubusercontent.com/tarpn/tarpn-node-controller/scripts/tarpn-core.service
+sudo mv tarpn-core.service /etc/systemd/system/tarpn-core.service
+sudo systemctl reload-daemon
+sudo systemctl enable tarpn-core
+sudo systemctl start tarpn-core
+```
+
 # Usage
 
 Run the core packet engine
 
 ```sh
-./bin/tarpn-node
+/opt/tarpn-core/bin/tarpn-node
 ```
 
 In a separate shell, run the demo app. 
 
 ```sh
-./bin/tarpn-app demo
+/opt/tarpn-core/bin/tarpn-app demo
 ```
 
 This app is a simple terminal chat program that lets you easily test out
@@ -125,6 +140,6 @@ flake8 tarpn
 ## Docker setup
 
 ```sh
-docker build . -t tarpn
-docker run tarpn:latest
+docker build . -t tarpn/tarpn-core
+docker run tarpn/tarpn-core:latest
 ```
