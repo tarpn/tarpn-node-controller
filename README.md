@@ -28,7 +28,7 @@ pip3 install virtualenv
 
 Create an installation directory under opt and install a Python environment into it
 
-_These instructions assume an installation directory of /opt/tarpn. However, the software can be installed at any location
+_These instructions assume an installation directory of /opt/tarpn. However, the software can be installed at any location_
 
 ```shell
 sudo mkdir /opt/tarpn-core
