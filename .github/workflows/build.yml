@@ -61,7 +61,7 @@ jobs:
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME || (echo "Failed to enable service"; exit 1)
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME || (echo "Failed to start service"; exit 1)
-        sleep 5
+        sleep 10
         XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt || exit 0
         echo "systemctl status:"; cat status.txt
         grep -i started status.txt  || (echo "Service didn't start"; exit 1)
