@@ -1,0 +1,15 @@
+[Unit]
+Description=A Pure Python Packet Program
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment="LC_ALL=C.UTF-8"
+Environment="LANG=C.UTF-8"
+Type=exec
+User=pi
+WorkingDirectory=/opt/tarpn-core
+ExecStart=/opt/tarpn-core/bin/tarpn-node
+
+[Install]
+WantedBy=multi-user.target

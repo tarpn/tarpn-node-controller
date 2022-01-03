@@ -1,7 +1,13 @@
-FROM python:3
+FROM python:3.7-slim-bullseye
 
-ADD req.txt /
+RUN pip install virtualenv
 
-RUN pip install -r req.txt
+RUN python3 -m virtualenv /opt/tarpn
 
-CMD [ "python", "--version" ]
+ADD dist /dist
+
+WORKDIR /opt/tarpn
+
+RUN ./bin/pip install /dist/*.whl
+
+CMD [ "./bin/tarpn-node" ]

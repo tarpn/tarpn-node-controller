@@ -5,20 +5,18 @@ name: Build
 
 on:
   push:
-    paths-ignore: 'README.md'
-    branches: [ master ]
+    paths-ignore: ['README.md']
+    branches: [ main ]
     tags:
       - 'v*.*.*'
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
   build:
-
     runs-on: [self-hosted, arm]
-    strategy:
-      fail-fast: false
-
+    env:
+      SERVICE_UNIT_NAME: 'tarpn-core-${{ github.sha }}-${{ github.run_id }}'
     steps:
     - name: Clean working directory
       shell: bash
@@ -44,6 +42,37 @@ jobs:
       with:
         name: dist
         path: dist
+    - name: Setup BATS
+      uses: mig4/setup-bats@v1
+    - name: Setup Bats libs
+      uses: brokenpip3/setup-bats-libs@0.1.0
+    - name: Install package and systemd unit
+      run: |
+        mkdir -p ~/.config/systemd/user/
+
+        bats -t scripts/test-install.bats
+
+        echo "Patched service unit:"; cat scripts/tarpn-core.service
+        cp scripts/tarpn-core.service ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
+
+        echo "Installing service"
+        loginctl enable-linger pi
+        sleep 1
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user daemon-reload
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user enable $SERVICE_UNIT_NAME || (echo "Failed to enable service"; exit 1)
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user start $SERVICE_UNIT_NAME || (echo "Failed to start service"; exit 1)
+        sleep 5
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user status $SERVICE_UNIT_NAME > status.txt || exit 0
+        echo "systemctl status:"; cat status.txt
+        grep -i started status.txt  || (echo "Service didn't start"; exit 1)
+        test -f ${SERVICE_UNIT_NAME}/config/node.ini || (echo "Should have bootstrapped default config file node.ini"; exit 1)
+        grep -i callsign status.txt || (echo "Should have failed with default config"; exit 1)
+        sleep 1
+    - name: Cleanup install
+      if: always()
+      run: |
+        XDG_RUNTIME_DIR=/run/user/$UID systemctl --user disable $SERVICE_UNIT_NAME || echo "Failed to disable service"
+        rm -f ~/.config/systemd/user/${SERVICE_UNIT_NAME}.service
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
