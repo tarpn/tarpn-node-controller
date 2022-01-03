@@ -40,7 +40,7 @@ cd /opt/tarpn-core
 Install a [release](https://github.com/tarpn/tarpn-node-controller/releases)
 
 ```shell
-/opt/tarpn-core/bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.2/tarpn_core-0.1.2-py3-none-any.whl
+/opt/tarpn-core/bin/pip install --upgrade https://github.com/tarpn/tarpn-node-controller/releases/download/v0.1.4/tarpn-core-0.1.4.tar.gz
 ```
 
 ## Configuration
