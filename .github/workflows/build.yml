@@ -98,7 +98,7 @@ jobs:
         with:
           push: false
           tags: tarpn/tarpn-core:latest
-          cache-from: type=registry,ref=user/app:latest
+          cache-from: type=registry,ref=tarpn/tarpn-core:latest
           cache-to: type=inline
   docker-test:
     runs-on: ubuntu-latest
@@ -110,7 +110,7 @@ jobs:
           push: false
           file: tests/docker/Dockerfile
           tags: tarpn/tarpn-test:latest
-          cache-from: type=registry,ref=user/app:latest
+          cache-from: type=registry,ref=tarpn/tarpn-core:latest
           cache-to: type=inline
 
 
