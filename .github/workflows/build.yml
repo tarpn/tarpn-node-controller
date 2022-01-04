@@ -112,7 +112,7 @@ jobs:
           push: false
           file: tests/docker/Dockerfile
           tags: tarpn/tarpn-test:latest
-          cache-from: type=inline
+          cache-from: type=registry,ref=tarpn/tarpn-core:latest
           cache-to: type=inline
 
 
