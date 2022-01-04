@@ -98,8 +98,8 @@ jobs:
         with:
           push: false
           tags: tarpn/tarpn-core:latest
-          cache-from: type=registry,ref=tarpn/tarpn-core:buildcache
-          cache-to: type=registry,ref=tarpn/tarpn-core:buildcache,mode=max
+          cache-from: type=registry,ref=tarpn/tarpn-core:latest
+          cache-to: type=inline
   docker-test:
     runs-on: ubuntu-latest
     needs: docker-build
@@ -112,7 +112,7 @@ jobs:
           push: false
           file: tests/docker/Dockerfile
           tags: tarpn/tarpn-test:latest
-          cache-from: type=registry,ref=tarpn/tarpn-core:buildcache
-          cache-to: type=registry,ref=tarpn/tarpn-core:buildcache,mode=max
+          cache-from: type=inline
+          cache-to: type=inline
 
 
