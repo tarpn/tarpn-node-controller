@@ -98,11 +98,13 @@ jobs:
         with:
           push: false
           tags: tarpn/tarpn-core:latest
-          cache-from: type=registry,ref=tarpn/tarpn-core:latest
-          cache-to: type=inline
+          cache-from: type=registry,ref=tarpn/tarpn-core:buildcache
+          cache-to: type=registry,ref=tarpn/tarpn-core:buildcache,mode=max
   docker-test:
     runs-on: ubuntu-latest
+    needs: docker-build
     steps:
+      - uses: actions/checkout@v2
       - name: Docker test build
         id: docker_build
         uses: docker/build-push-action@v2
@@ -110,7 +112,7 @@ jobs:
           push: false
           file: tests/docker/Dockerfile
           tags: tarpn/tarpn-test:latest
-          cache-from: type=registry,ref=tarpn/tarpn-core:latest
-          cache-to: type=inline
+          cache-from: type=registry,ref=tarpn/tarpn-core:buildcache
+          cache-to: type=registry,ref=tarpn/tarpn-core:buildcache,mode=max
 
 
