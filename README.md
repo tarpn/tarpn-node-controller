@@ -26,9 +26,9 @@ pip3 install virtualenv
 
 ## Install the software (RPi)
 
-Create an installation directory under opt and install a Python environment into it
+Create an installation directory under `/opt` and set it up as a [Python virtual environment](https://github.com/tarpn/tarpn-node-controller#python-virtual-environment).
 
-_These instructions assume an installation directory of /opt/tarpn. However, the software can be installed at any location_
+_These instructions assume an installation directory of /opt/tarpn. However, the software can be installed at any user-writeable location_
 
 ```shell
 sudo mkdir /opt/tarpn-core
@@ -89,6 +89,14 @@ sudo systemctl reload-daemon
 sudo systemctl enable tarpn-core
 sudo systemctl start tarpn-core
 ```
+
+## Python Virtual Environment
+
+These instructions will install the software into what is known as a Python virtual environment (sometimes called a "venv"). This is a directory that contains an isolated set of libraries for Python to use. This way, a project can use different versions of libraries than the ones that are installed in the system-wide Python environment (as you would get from doing apt-get install python-serial, for example).
+
+Additional information:
+* https://docs.python.org/3/tutorial/venv.html
+* https://realpython.com/python-virtual-environments-a-primer/
 
 # Usage
 
