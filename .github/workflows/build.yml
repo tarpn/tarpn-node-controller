@@ -104,10 +104,9 @@ jobs:
       - uses: actions/checkout@v2
       - name: Install dependencies
         run: |
-          sudo apt-get install -y python3.7
-          python3.7 -m pip install --upgrade pip
-          python3.7 -m pip install virtualenv
-          python3.7 -m virtualenv venv
+          python3 -m pip install --upgrade pip
+          python3 -m pip install virtualenv
+          python3 -m virtualenv venv
           source venv/bin/activate
           pip install -e .[develop]
           python setup.py bdist_wheel
