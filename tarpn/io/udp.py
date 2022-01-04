@@ -11,7 +11,6 @@ from tarpn.datalink import FrameData, L2Queuing
 from tarpn.log import LoggingMixin
 from tarpn.scheduler import CloseableThread
 
-
 packet_logger = logging.getLogger("packet")
 udp_logger = logging.getLogger("udp")
 

@@ -67,7 +67,7 @@ def run_node(args):
               "https://github.com/tarpn/tarpn-node-controller")
         sys.exit(1)
     else:
-        print(f"Loaded configuration for {node_call}")
+        print(f"Loaded configuration for {node_call} from {args.config}")
 
     # Setup logging
     logging_config_file = node_settings.get("log.config", "not_set")
@@ -75,6 +75,7 @@ def run_node(args):
         log_dir = node_settings.get("log.dir")
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
+        print(f"Loading log configuration from {logging_config_file}")
         logging.config.fileConfig(
             logging_config_file, defaults={"log.dir": log_dir}, disable_existing_loggers=False)
 
