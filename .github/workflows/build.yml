@@ -102,6 +102,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+      - name: Install dependencies
+        run: |
+          python3.7 -m pip install --upgrade pip
+          python3.7 -m pip install virtualenv
+          python3.7 -m virtualenv venv
+          source venv/bin/activate
+          pip install -e .[develop]
+          python setup.py bdist_wheel
+          python setup.py sdist
       - name: Set up QEMU
         id: qemu
         uses: docker/setup-qemu-action@v1
