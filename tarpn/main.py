@@ -182,7 +182,7 @@ def run_node(args):
             scheduler.submit(UnixServerThread(app_config.app_socket(), app_protocol))
             multiplexer_protocol = partial(MultiplexingProtocol, app_multiplexer)
             # TODO bind or connect?
-            mesh_l4.connect(multiplexer_protocol, app_address.address, MeshAddress.parse("00.a2"), app_address.port)
+            mesh_l4.connect(multiplexer_protocol, app_address.address, app_address.address, app_address.port)
 
         sock = node_settings.get("node.sock")
         print(f"Binding node terminal to {sock}")

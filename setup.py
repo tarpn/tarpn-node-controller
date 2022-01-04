@@ -49,7 +49,8 @@ setup(
                  'tarpn-serial-dump = tarpn.tools.serial_dump:main',
                  'tarpn-packet-dump = tarpn.tools.packet_dump:main',
                  'tarpn-node = tarpn.main:main',
-                 'tarpn-app = tarpn.app.runner:main'
+                 'tarpn-app = tarpn.app.runner:main',
+                 'tarpn-shell = tarpn.tools.shell:main'
              ]},
     python_requires='>=3.7',
     install_requires=[

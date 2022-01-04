@@ -15,3 +15,6 @@ Connect to one of the nodes using a domain socket
 Inject some network errors using Pumba
 
 > docker run -it --rm  -v /var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba --interval=5m --log-level=info netem --duration 100s loss -p 100 tarpn-node-controller_david_1
+
+
+dig +short bob

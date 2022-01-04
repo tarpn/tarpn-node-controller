@@ -11,4 +11,9 @@ do
     IFS="|"
 done
 
+if [[ -v SLEEP ]];
+then
+    sleep $SLEEP
+fi
+
 /opt/tarpn/bin/tarpn-node

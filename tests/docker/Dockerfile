@@ -1,6 +1,6 @@
 FROM python:3.7-slim-bullseye
 
-RUN apt-get update; apt-get install -y socat netcat iproute2
+RUN apt-get update; apt-get install -y socat netcat iproute2 dnsutils
 
 RUN pip install virtualenv
 

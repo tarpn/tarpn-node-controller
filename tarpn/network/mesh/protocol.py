@@ -177,7 +177,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
     def pre_close(self):
         # Erase our neighbors and send ADVERT
         self.neighbors.clear()
-        self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
+        self.bump_epoch(datetime.utcnow(), "closing")
         self.send_advertisement()
         time.sleep(1)  # TODO better solution is to wait for L3 queue to drain in close
 
@@ -213,6 +213,12 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         """Wake up the main thread"""
         self.queue.put(None)
 
+    def bump_epoch(self, now: datetime, reason: str = ""):
+        if now != self.last_epoch_bump:
+            self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
+            self.last_epoch_bump = now
+            self.debug(f"Bumping our epoch to {self.our_link_state_epoch} due to {reason}")
+
     def check_dead_neighbors(self, now: datetime) -> int:
         min_deadline = self.config.get_int("mesh.dead.interval")
         for neighbor in list(self.neighbors.values()):
@@ -224,8 +230,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 self.info(f"Neighbor {neighbor.address} detected as DOWN!")
 
                 neighbor.state = NeighborState.DOWN
-                self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
-                self.last_epoch_bump = datetime.utcnow()
+                self.bump_epoch(datetime.utcnow(), "dead neighbor")
                 self.last_advert = datetime.fromtimestamp(0) # Force our advert to go out
             else:
                 min_deadline = min(deadline, min_deadline)
@@ -246,6 +251,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         for node, links in self.link_states.items():
             for link in list(links):
                 if (now - link.created).seconds > max_age:
+                    self.info(f"Lost link to {node}")
                     self.debug(f"Expiring link state {link} for {node}")
                     links.remove(link)
             if len(links) == 0:
@@ -253,11 +259,11 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         for node in to_delete:
             del self.link_states[node]
+            del self.link_state_epochs[node]
 
         deadline = int(max_age * .80) - (now - self.last_epoch_bump).seconds
         if deadline <= 0:
-            self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
-            self.last_epoch_bump = now
+            self.bump_epoch(now, "max epoch age")
             self.send_advertisement()
             return int(max_age * .80)
         else:
@@ -355,7 +361,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         now = datetime.utcnow()
         sender = network_header.source
         if network_header.source not in self.neighbors:
-            self.info(f"Saw new neighbor {sender} ({hello.name})")
+            self.info(f"New neighbor {sender} ({hello.name})")
             self.neighbors[sender] = Neighbor(
                 address=sender,
                 name=hello.name,
@@ -365,8 +371,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 last_update=now,
                 state=NeighborState.INIT
             )
-            self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
-            self.last_epoch_bump = now
+            self.bump_epoch(now, "new neighbor")
         else:
             self.neighbors[sender].neighbors = hello.neighbors
             self.neighbors[sender].last_seen = now
@@ -374,13 +379,13 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         if self.our_address in hello.neighbors:
             delay = 100
             if self.neighbors[sender].state != NeighborState.UP:
-                self.info(f"Neighbor {sender} is UP!")
+                self.info(f"Neighbor {sender} ({self.neighbors[sender].name}) is UP!")
                 self.scheduler.timer(delay, partial(self.send_query, sender), auto_start=True)
                 self.neighbors[sender].state = NeighborState.UP
                 self.neighbors[sender].last_update = now
                 delay *= 1.2
         else:
-            self.info(f"Neighbor {sender} is initializing...")
+            self.debug(f"Neighbor {sender} is initializing...")
             self.neighbors[sender].state = NeighborState.INIT
             self.neighbors[sender].last_update = now
 
@@ -411,6 +416,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         latest_epoch = self.link_state_epochs.get(advert.node)
         if latest_epoch is None:
+            self.info(f"New link for node {advert.node}")
             self.debug(f"Initializing link state for {advert.node} with epoch {advert.epoch}")
             update = True
         else:
@@ -420,6 +426,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 self.debug(f"Updating link state for {advert.node}. "
                            f"Received epoch is {advert.epoch}, last known was {latest_epoch}")
             elif epoch_cmp == 0:
+                self.info(f"Reset link for node {advert.node}")
                 self.debug(f"Resetting link state for {advert.node}. "
                            f"Received epoch is {advert.epoch}, last known was {latest_epoch}")
             else:
