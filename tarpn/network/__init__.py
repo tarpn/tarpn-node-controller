@@ -3,9 +3,11 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import List, Optional, Tuple
 
+from pyformance.meters.timer import TimerContext
+
 from tarpn.datalink import L2Payload
 from tarpn.log import LoggingMixin
-#from tarpn.transport import L4Protocol
+from tarpn.metrics import MetricsMixin
 
 
 class QoS(IntEnum):
@@ -30,6 +32,7 @@ class L3Payload:
     link_id: int = field(compare=False)
     qos: QoS = field(compare=True, default=QoS.Default)
     reliable: bool = field(compare=False, default=True)
+    timer: TimerContext = field(compare=False, default=None)
 
 
 class L3Queueing:
@@ -40,21 +43,35 @@ class L3Queueing:
         raise NotImplementedError
 
 
-class L3PriorityQueue(L3Queueing):
+class L3PriorityQueue(L3Queueing, MetricsMixin, LoggingMixin):
     def __init__(self, max_size=20):
+        LoggingMixin.__init__(self)
         self._queue = queue.PriorityQueue(max_size)
+        self.max_size = 0
+        self.gauge(self._queue.qsize, "qsize")
+        self.gauge(self.max_qsize, "max")
+
+    def max_qsize(self) -> int:
+        return self.max_size
 
     def offer(self, packet: L3Payload):
         try:
+            packet.timer = self.timer("qtime").time()
+            self.meter("offer").mark()
             self._queue.put(packet, False, None)
+            self.max_size = max(self.max_size, self._queue.qsize())
             return True
         except queue.Full:
-            print("Full!")
+            self.meter("full").mark()
+            self.error(f"Queue full, dropping {packet}")
             return False
 
     def maybe_take(self) -> Optional[L3Payload]:
         try:
-            return self._queue.get(True, 1.0)
+            packet = self._queue.get(True, 1.0)
+            packet.timer.stop()
+            self.meter("take").mark()
+            return packet
         except queue.Empty:
             return None
 

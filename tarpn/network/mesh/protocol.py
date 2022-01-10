@@ -3,7 +3,7 @@ import enum
 import queue
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from io import BytesIO
 from typing import Tuple, List, Dict, Optional, Set, cast
@@ -15,6 +15,7 @@ from tarpn.datalink import L2Payload
 from tarpn.datalink.ax25_l2 import AX25Address
 from tarpn.datalink.protocol import LinkMultiplexer
 from tarpn.log import LoggingMixin
+from tarpn.metrics import MetricsMixin
 from tarpn.network import L3Protocol, L3Address, L3Payload, QoS
 from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.header import Protocol, NetworkHeader, Header, HelloHeader, LinkStateHeader, \
@@ -50,6 +51,9 @@ class NeighborState(enum.Enum):
     INIT = 2    # We've seen HELLO
     UP = 3      # We've seen ourselves in a HELLO
 
+    def __repr__(self):
+        return self.name
+
 
 @dataclasses.dataclass
 class Neighbor:
@@ -62,7 +66,7 @@ class Neighbor:
     state: NeighborState
 
 
-class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
+class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin, MetricsMixin):
     """
     A simple protocol for a partially connected mesh network.
 
@@ -87,8 +91,8 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                  link_multiplexer: LinkMultiplexer,
                  l4_handlers: L4Handlers,
                  scheduler: Scheduler):
-        LoggingMixin.__init__(self, extra_func=self.log_ident)
         CloseableThreadLoop.__init__(self, name="MeshNetwork")
+        LoggingMixin.__init__(self, extra_func=self.log_ident)
 
         self.time = time
         self.config = config
@@ -124,13 +128,20 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         self.last_hello_time = datetime.fromtimestamp(0)
         self.last_advert = datetime.utcnow()
-        self.last_query = datetime.utcnow()
+        self.last_query = datetime.utcnow()  # TODO keep track of these per-neighbor
         self.last_epoch_bump = datetime.utcnow()
 
+        self.gauge(self._get_queue_idle_value, "queue", "idle", "ratio")
+        self.gauge(self.get_current_epoch, "epoch")
+
+        # Start this thread a little bit in the future
         self.scheduler.timer(1_000, partial(self.scheduler.submit, self), True)
 
     def __repr__(self):
         return f"<MeshProtocol {self.our_address}>"
+
+    def get_current_epoch(self) -> int:
+        return self.our_link_state_epoch
 
     def log_ident(self) -> str:
         return f"[MeshProtocol {self.our_address}]"
@@ -186,18 +197,35 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         CloseableThreadLoop.close(self)
 
     def iter_loop(self) -> bool:
+        loop_t0 = time.time_ns()
+
         # Check if we need to take some periodic action like sending a HELLO
         now = datetime.utcnow()
         deadline = self.deadline(now)
+        # self.debug(f"Getting next event with deadline {deadline}")
 
         # Now wait at most the deadline for the next action for new incoming packets
         try:
+            self.meter("queue", "deadline").mark(deadline)
+            qtimer = self.timer("queue", "block").time()
             event = self.queue.get(block=True, timeout=deadline)
+            qtimer.stop()
             if event is not None:
+                timer = self.timer("queue", "process").time()
                 self.process_incoming(event)
+                timer.stop()
                 return True
         except queue.Empty:
             return False
+
+    def _get_queue_idle_value(self) -> float:
+        """Derived metric for L3 queue idle time percentage"""
+        busy = self.timer("queue", "process").get_mean()
+        idle = self.timer("queue", "block").get_mean()
+        if busy == 0 or idle == 0:
+            return 0.0
+        else:
+            return 1.0 * idle / (busy + idle)
 
     def deadline(self, now: datetime) -> int:
         # TODO use time.time_ns instead of datetime
@@ -205,8 +233,8 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             self.check_dead_neighbors(now),
             self.check_hello(now),
             self.check_epoch(now),
-            self.check_advert(now),
-            self.check_query(now)
+            self.check_query(now),
+            self.check_advert(now)
         ])
 
     def wakeup(self):
@@ -215,9 +243,11 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
     def bump_epoch(self, now: datetime, reason: str = ""):
         if now != self.last_epoch_bump:
+            self.meter("epoch", "bump").mark()
             self.our_link_state_epoch = next(self.our_link_state_epoch_generator)
             self.last_epoch_bump = now
             self.debug(f"Bumping our epoch to {self.our_link_state_epoch} due to {reason}")
+            self.last_advert = datetime.fromtimestamp(0)  # Force our advert to go out
 
     def check_dead_neighbors(self, now: datetime) -> int:
         min_deadline = self.config.get_int("mesh.dead.interval")
@@ -228,10 +258,9 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             deadline = self.config.get_int("mesh.dead.interval") - (now - neighbor.last_seen).seconds
             if deadline <= 0:
                 self.info(f"Neighbor {neighbor.address} detected as DOWN!")
-
+                self.meter(f"neighbors.{neighbor.address}.down").mark()
                 neighbor.state = NeighborState.DOWN
                 self.bump_epoch(datetime.utcnow(), "dead neighbor")
-                self.last_advert = datetime.fromtimestamp(0) # Force our advert to go out
             else:
                 min_deadline = min(deadline, min_deadline)
         return min_deadline
@@ -264,7 +293,6 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         deadline = int(max_age * .80) - (now - self.last_epoch_bump).seconds
         if deadline <= 0:
             self.bump_epoch(now, "max epoch age")
-            self.send_advertisement()
             return int(max_age * .80)
         else:
             return deadline
@@ -304,14 +332,24 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             self.error(f"Could not decode network packet from {payload}.", e)
             return
 
+        # Collect some metrics
+        self.meter("protocols", "in", network_header.protocol.name).mark()
+        self.meter("bytes", "in").mark(len(payload.l3_data))
+        self.meter("packets", "in").mark()
+        if network_header.destination in (self.our_address, self.BroadcastAddress):
+            self.meter("source", str(network_header.source), "in").mark()
+
         # Handle L3 protocols first
         if network_header.destination == self.our_address and network_header.protocol == Protocol.CONTROL:
             ctrl = ControlHeader.decode(stream)
-            self.info(f"Got {ctrl} from {network_header.source}")
+            self.debug(f"< {network_header.source} {network_header.destination} {ctrl}")
             if ctrl.control_type == ControlType.PING:
                 self.ping_protocol.handle_ping(network_header, ctrl)
+            elif ctrl.control_type == ControlType.UNREACHABLE:
+                self.warning(f"< UNREACHABLE")
             else:
                 self.warning(f"Ignoring unsupported control packet: {ctrl.control_type}")
+                self.meter("drop", "unknown").mark()
             return
 
         if network_header.protocol == Protocol.HELLO:
@@ -328,17 +366,19 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         # Now decide if we should handle or drop
         if self.header_cache.contains(hash(network_header)):
+            self.meter("drop", "duplicate").mark()
             self.debug(f"Dropping duplicate {network_header}")
             return
 
         # If the packet is addressed to us, handle it
         if network_header.destination == self.our_address:
-            self.debug(f"Handling {network_header}")
+            # TODO check for supported protocols here?
+            self.debug(f"Handling L4 {network_header}")
             self.l4_handlers.handle_l4(network_header, network_header.protocol, stream)
             return
 
         if network_header.destination == self.BroadcastAddress:
-            self.debug(f"Handling broadcast {network_header}")
+            self.debug(f"Handling L4 broadcast {network_header}")
             self.l4_handlers.handle_l4(network_header, network_header.protocol, stream)
             if network_header.ttl > 1:
                 # Decrease the TTL and re-broadcast on all links except where we heard it
@@ -348,8 +388,12 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 stream.seek(0)
                 self.send(header_copy, stream.read(), exclude_link_id=payload.link_id)
             else:
+                self.meter("drop", "ttl").mark()
                 self.debug("Not re-broadcasting due to TTL")
         else:
+            # If not addressed to us, forward it along
+            self.meter("packets", "forward").mark()
+            self.debug(f"> {network_header.source} {network_header.destination} {network_header.protocol.name} Forwarding")
             header_copy = dataclasses.replace(network_header, ttl=network_header.ttl - 1)
             stream.seek(0)
             header_copy.encode(stream)
@@ -357,7 +401,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             self.send(header_copy, stream.read(), exclude_link_id=payload.link_id)
 
     def handle_hello(self, link_id: int, network_header: NetworkHeader, hello: HelloHeader):
-        self.debug(f"Handling hello {hello}")
+        self.debug(f"< {hello}")
         now = datetime.utcnow()
         sender = network_header.source
         if network_header.source not in self.neighbors:
@@ -371,27 +415,28 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 last_update=now,
                 state=NeighborState.INIT
             )
-            self.bump_epoch(now, "new neighbor")
         else:
             self.neighbors[sender].neighbors = hello.neighbors
             self.neighbors[sender].last_seen = now
 
         if self.our_address in hello.neighbors:
-            delay = 100
             if self.neighbors[sender].state != NeighborState.UP:
                 self.info(f"Neighbor {sender} ({self.neighbors[sender].name}) is UP!")
-                self.scheduler.timer(delay, partial(self.send_query, sender), auto_start=True)
+                # Set last_query to the max query interval minus a bit
+                self.last_query = now - timedelta(seconds=(self.config.get_int("mesh.query.interval") - 10))
+                self.meter(f"neighbors.{sender}.up").mark()
                 self.neighbors[sender].state = NeighborState.UP
                 self.neighbors[sender].last_update = now
-                delay *= 1.2
+                self.bump_epoch(now, "new neighbor")
         else:
             self.debug(f"Neighbor {sender} is initializing...")
             self.neighbors[sender].state = NeighborState.INIT
             self.neighbors[sender].last_update = now
+            self.send_hello()
 
     def send_hello(self):
-        self.debug("Sending Hello")
         hello = HelloHeader(self.config.get("host.name"), self.alive_neighbors())
+        self.debug(f"> {hello}")
         network_header = NetworkHeader(
             version=0,
             qos=QoS.Lower,
@@ -413,6 +458,8 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
     def handle_advertisement(self, link_id: int, network_header: NetworkHeader, advert: LinkStateAdvertisementHeader):
         if advert.node == self.our_address:
             return
+
+        self.debug(f"< {advert}")
 
         latest_epoch = self.link_state_epochs.get(advert.node)
         if latest_epoch is None:
@@ -468,7 +515,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             link_states=link_states
         )
 
-        self.debug("Sending Advertisement {}".format(advertisement))
+        self.debug(f"> {advertisement}")
 
         network_header = NetworkHeader(
             version=0,
@@ -489,7 +536,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         self.send(network_header, buffer)
 
     def handle_query(self, link_id: int, network_header: NetworkHeader, query: LinkStateQueryHeader):
-        self.debug(f"Handling {query}")
+        self.debug(f"< {query}")
         dest = network_header.source
 
         adverts = []
@@ -536,7 +583,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
 
         dest = network_header.source
         for advert in adverts:
-            self.debug(f"Sending {advert} advert to {network_header.source}")
+            self.debug(f"> {advert}")
             resp_header = NetworkHeader(
                 version=0,
                 qos=QoS.Lower,
@@ -556,7 +603,6 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             self.send(resp_header, buffer)
 
     def send_query(self, neighbor: MeshAddress):
-        self.debug(f"Querying {neighbor} for link states")
         known_link_states = dict()
         for node, link_states in self.valid_link_states().items():
             known_link_states[node] = self.link_state_epochs[node]
@@ -567,6 +613,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             link_nodes=list(known_link_states.keys()),
             link_epochs=list(known_link_states.values())
         )
+        self.debug(f"> {query}")
 
         network_header = NetworkHeader(
             version=0,
@@ -586,7 +633,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         buffer = stream.read()
         self.send(network_header, buffer)
 
-    def route_to(self, address: MeshAddress) -> List[MeshAddress]:
+    def route_to(self, address: MeshAddress) -> Tuple[List[MeshAddress], int]:
         g = nx.DiGraph()
         # Other's links
         for node, link_states in self.valid_link_states().items():
@@ -600,12 +647,12 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         try:
             # Compute the shortest path
             path = nx.dijkstra_path(g, self.our_address, address)
-
+            path_weight = nx.path_weight(g, path, "weight")
             # Ensure we have a return path
             nx.dijkstra_path(g, address, self.our_address)
-            return path
+            return path, path_weight
         except NetworkXException:
-            return []
+            return [], 0
 
     def send(self, header: NetworkHeader, buffer: bytes, exclude_link_id: Optional[int] = None):
         """
@@ -623,21 +670,31 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
             neighbor = self.neighbors.get(header.destination)
             links = [neighbor.link_id]
         else:
-            best_route = self.route_to(header.destination)
-            self.debug(f"Routing {header} via {best_route}")
+            best_route, cost = self.route_to(header.destination)
+            self.debug(f"Routing {header} via {best_route} with cost {cost}")
             if len(best_route) > 1:
                 next_hop = best_route[1]
                 hop_neighbor = self.neighbors.get(next_hop)
                 if hop_neighbor is not None:
                     links = [hop_neighbor.link_id]
+                    self.hist("route", "cost").add(cost)
+                    self.hist("route", "cost", str(header.destination)).add(cost)
                 else:
                     self.error(f"Calculated route including {next_hop}, but we're missing that neighbor.")
                     links = []
             else:
                 self.warning(f"No route to {header.destination}, dropping.")
+                self.meter("drop", "no-route").mark()
+                self.meter("drop", "no-route", str(header.destination)).mark()
                 links = []
 
         for link_id in links:
+            self.meter("protocols", "out", header.protocol.name).mark()
+            self.meter("bytes", "out").mark(len(buffer))
+            self.meter("packets", "out").mark()
+            self.hist("packets", "ttl").add(header.ttl)
+            self.meter("source", str(header.source), "out").mark()
+            self.meter("dest", str(header.destination), "out").mark()
             payload = L3Payload(
                 source=header.source,
                 destination=header.destination,
@@ -646,7 +703,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
                 link_id=link_id,
                 qos=QoS(header.qos),
                 reliable=False)
-            self.debug(f"Sending {payload}")
+            #self.debug(f"Sending {payload}")
             self.link_multiplexer.offer(payload)
 
     def failed_send(self, neighbor: MeshAddress):
@@ -662,7 +719,7 @@ class MeshProtocol(CloseableThreadLoop, L3Protocol, LoggingMixin):
         if address == MeshProtocol.BroadcastAddress:
             return True, l3_mtu
         else:
-            path = self.route_to(cast(MeshAddress, address))
+            path, cost = self.route_to(cast(MeshAddress, address))
             return len(path) > 0, l3_mtu
 
     def send_packet(self, payload: L3Payload) -> bool:

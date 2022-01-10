@@ -94,9 +94,13 @@ class ControlType(IntEnum):
     # Up to 0x7F
     PING = 0x00
     LOOKUP = 0x01
+    UNREACHABLE = 0x02
 
     def _missing_(cls, value):
         return None
+
+    def __str__(self):
+        return f"{self.name} ({self.value:02x})"
 
 
 @dataclass(eq=True, frozen=True)
@@ -123,6 +127,9 @@ class ControlHeader(Header):
         ByteUtils.write_uint8(data, self.extra_length)
         data.write(self.extra)
 
+    def __str__(self):
+        return f"CTRL {str(self.control_type)} req={self.is_request}"
+
 
 @dataclass(eq=True, frozen=True)
 class HelloHeader(Header):
@@ -147,6 +154,9 @@ class HelloHeader(Header):
         for neighbor in self.neighbors:
             ByteUtils.write_uint16(data, neighbor.id)
 
+    def __str__(self):
+        return f"HELLO {self.name} {self.neighbors}"
+
 
 @dataclass(eq=True, frozen=True)
 class LinkStateHeader(Header):
@@ -170,6 +180,9 @@ class LinkStateHeader(Header):
         ByteUtils.write_uint16(data, self.node.id)
         ByteUtils.write_uint16(data, self.via.id)
         ByteUtils.write_uint8(data, self.quality)
+
+    def __repr__(self):
+        return f"(node={self.node} via={self.via} q={self.quality})"
 
 
 @dataclass(eq=True, frozen=True)
@@ -206,6 +219,9 @@ class LinkStateAdvertisementHeader(Header):
         for link_state in self.link_states:
             link_state.encode(data)
 
+    def __str__(self):
+        return f"ADVERT {self.node} epoch={self.epoch} links={self.link_states}"
+
 
 @dataclass(eq=True, frozen=True)
 class LinkStateQueryHeader(Header):
@@ -236,6 +252,9 @@ class LinkStateQueryHeader(Header):
         for node, epoch in zip(self.link_nodes, self.link_epochs):
             ByteUtils.write_uint16(data, node.id)
             ByteUtils.write_int8(data, epoch)
+
+    def __str__(self):
+        return f"QUERY {self.node} {self.epoch}"
 
 
 class RecordType(IntEnum):

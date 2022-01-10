@@ -52,6 +52,12 @@ class L2Queuing:
         """
         raise NotImplementedError
 
+    def qsize(self) -> int:
+        raise NotImplementedError
+
+    def mtu(self) -> int:
+        raise NotImplementedError
+
     def close(self):
         raise NotImplementedError
 
@@ -104,6 +110,12 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin, LoggingMixin):
         self._lock: threading.Lock = threading.Lock()
         self._not_empty: threading.Condition = threading.Condition(self._lock)
 
+    def qsize(self) -> int:
+        return self._outbound.maxsize
+
+    def mtu(self) -> int:
+        return self._max_payload_size
+
     def offer_outbound(self, frame: FrameData) -> bool:
         if len(frame.data) > self._max_payload_size:
             self.error(f"Payload too large, dropping. Size is {len(frame.data)}, max is {self._max_payload_size}")
@@ -134,6 +146,7 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin, LoggingMixin):
         # Since the deque is bounded, this will eject old items to make room for this frame
         with self._lock:
             self.meter("inbound", "offer").mark()
+            #frame.timer = self.timer("inbound", "wait").time()
             self._inbound.append((frame, next(self._inbound_count)))
             self._not_empty.notify()
 
@@ -142,6 +155,7 @@ class L2FIFOQueue(L2Queuing, L2IOQueuing, MetricsMixin, LoggingMixin):
             while not len(self._inbound):
                 self._not_empty.wait()
             inbound, count = self._inbound.popleft()
+            #inbound.timer.stop()
             dropped = count - self._last_inbound - 1
             self._last_inbound = count
             self.meter("inbound", "take").mark()

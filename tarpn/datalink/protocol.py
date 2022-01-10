@@ -5,6 +5,7 @@ from typing import Callable, Dict, Optional, Iterator
 
 from tarpn.datalink import FrameData, L2Queuing, L2Address
 from tarpn.log import LoggingMixin
+from tarpn.metrics import MetricsMixin
 from tarpn.network import L3Payload, L3Queueing
 from tarpn.scheduler import Scheduler, CloseableThreadLoop
 from tarpn.util import BackoffGenerator
@@ -121,7 +122,7 @@ class LinkMultiplexer:
         raise NotImplementedError
 
 
-class DefaultLinkMultiplexer(LinkMultiplexer):
+class DefaultLinkMultiplexer(LinkMultiplexer, MetricsMixin):
     def __init__(self, queue_factory: Callable[[], L3Queueing], scheduler: Scheduler):
         self.queue_factory = queue_factory
         self.link_id_counter = itertools.count()

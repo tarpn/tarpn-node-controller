@@ -1,27 +1,76 @@
 services:
   alice:
+    # Connected to bob
     image: tarpn/tarpn-test:latest
+    container_name: alice
+    cap_add:
+      - NET_ADMIN
     environment:
-      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem_A0 udp:bob:12345|PTY,raw,echo=1,link=/tmp/vmodem_B1 udp-listen:10000
-      - SLEEP=3
+      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem1 udp-listen:12345
+      - SLEEP=1
+      - DEBUG=true
     volumes:
       - ./config/alice.ini:/opt/tarpn/config/node.ini
       - /tmp/socks/:/tmp/socks/
     command: /opt/tarpn/bin/launch-tarpn.sh
+    healthcheck:
+      test: [ "CMD", "curl", "--unix-socket", "/tmp/socks/tarpn-shell-alice.sock", "http://dummy/healthcheck" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   bob:
+    # Connected to alice and carol
     image: tarpn/tarpn-test:latest
+    container_name: bob
+    cap_add:
+      - NET_ADMIN
     environment:
-      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem_A1 udp-listen:12345
+      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem1 udp:alice:12345|PTY,raw,echo=1,link=/tmp/vmodem2 udp:carol:10000
+      - SLEEP=2
+      - DEBUG=true
     volumes:
       - ./config/bob.ini:/opt/tarpn/config/node.ini
       - /tmp/socks/:/tmp/socks/
     command: /opt/tarpn/bin/launch-tarpn.sh
   carol:
+    # Connected to alice and dave and eve
     image: tarpn/tarpn-test:latest
+    container_name: carol
+    cap_add:
+      - NET_ADMIN
     environment:
-      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem_B0 udp:alice:10000
-      - SLEEP=1
+      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem1 udp-listen:10000|PTY,raw,echo=1,link=/tmp/vmodem2 udp-listen:10001|PTY,raw,echo=1,link=/tmp/vmodem3 udp:eve:10002
+      - SLEEP=3
+      - DEBUG=true
     volumes:
       - ./config/carol.ini:/opt/tarpn/config/node.ini
+      - /tmp/socks/:/tmp/socks/
+    command: /opt/tarpn/bin/launch-tarpn.sh
+  dave:
+    # Connected to carol
+    image: tarpn/tarpn-test:latest
+    container_name: dave
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem1 udp:carol:10001
+      - SLEEP=1
+      - DEBUG=true
+    volumes:
+      - ./config/dave.ini:/opt/tarpn/config/node.ini
+      - /tmp/socks/:/tmp/socks/
+    command: /opt/tarpn/bin/launch-tarpn.sh
+  eve:
+    # Connected to carol
+    image: tarpn/tarpn-test:latest
+    container_name: eve
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - SOCAT_ARGS=PTY,raw,echo=1,link=/tmp/vmodem1 udp-listen:10002
+      - SLEEP=2
+      - DEBUG=true
+    volumes:
+      - ./config/eve.ini:/opt/tarpn/config/node.ini
       - /tmp/socks/:/tmp/socks/
     command: /opt/tarpn/bin/launch-tarpn.sh

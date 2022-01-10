@@ -59,8 +59,10 @@ class Scheduler(LoggingMixin):
         thread.start()
         self.threads.append(thread)
 
-    def run(self, runnable: Callable[..., Any]):
-        self._futures.append(self.executor.submit(runnable))
+    def run(self, runnable: Callable[..., Any]) -> Future:
+        fut = self.executor.submit(runnable)
+        self._futures.append(fut)
+        return fut
 
     def add_shutdown_hook(self, runnable: Callable[..., Any]):
         self.shutdown_tasks.append(runnable)

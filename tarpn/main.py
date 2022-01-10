@@ -3,16 +3,20 @@ import logging
 import logging.config
 import os
 import shutil
+import signal
 import sys
 from functools import partial
+
+from pyformance.reporters import ConsoleReporter
 
 import tarpn.netrom.router
 from tarpn.application import TransportMultiplexer, MultiplexingProtocol, ApplicationProtocol
 from tarpn.application.command import NodeCommandProcessor
+from tarpn.application.node import TarpnCoreProtocol
 from tarpn.application.shell import TarpnShellProtocol
 from tarpn.ax25 import AX25Call
 from tarpn.datalink import L2FIFOQueue
-from tarpn.datalink.ax25_l2 import AX25Protocol, DefaultLinkMultiplexer, AX25Address
+from tarpn.datalink.ax25_l2 import AX25Protocol, DefaultLinkMultiplexer
 from tarpn.datalink.protocol import L2IOLoop
 from tarpn.io.kiss import KISSProtocol
 from tarpn.io.serial import SerialDevice
@@ -41,7 +45,7 @@ def main():
     parser = argparse.ArgumentParser(description='Decode packets from a serial port')
     parser.add_argument("config", nargs="?", default="config/node.ini", help="Config file")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
-    parser.add_argument("--profile", action="store_true", help="Attache a profiler to the process")
+    parser.add_argument("--profile", action="store_true", help="Attach a profiler to the process")
     args = parser.parse_args()
     if args.profile:
         import cProfile
@@ -112,7 +116,7 @@ def run_node(args):
         intercept_dests = {}
         interceptor = lambda frame: None
 
-    for port_config in s.port_configs():
+    for port_id, port_config in s.port_configs().items():
         if port_config.get_boolean("port.enabled") and port_config.get("port.type") == "serial":
             l2_queueing = L2FIFOQueue(20, AX25Protocol.maximum_frame_size())
             port_queues[port_config.port_id()] = l2_queueing
@@ -123,6 +127,7 @@ def run_node(args):
                          port_config.get("serial.device"),
                          port_config.get_int("serial.speed"),
                          port_config.get_float("serial.timeout"),
+                         port_config.get_boolean("serial.duplex", True),
                          scheduler)
             scheduler.submit(L2IOLoop(l2_queueing, l2))
 
@@ -186,12 +191,22 @@ def run_node(args):
 
         sock = node_settings.get("node.sock")
         print(f"Binding node terminal to {sock}")
-        scheduler.submit(UnixServerThread(sock, TarpnShellProtocol(mesh_l3, mesh_l4)))
+        #scheduler.submit(UnixServerThread(sock, TarpnShellProtocol(mesh_l3, mesh_l4)))
+        scheduler.submit(UnixServerThread(sock, TarpnCoreProtocol(s, port_queues, mesh_l3, mesh_l4, scheduler)))
+
 
     # Start a metrics reporter
-    #reporter = ConsoleReporter(reporting_interval=300)
-    #scheduler.timer(10_000, reporter.start, True)
+    #reporter = ConsoleReporter(reporting_interval=300, stream=sys.stdout)
+    #reporter.start()
     #scheduler.add_shutdown_hook(reporter.stop)
+
+    def signal_handler(signum, frame):
+        logger.info(f"Shutting down due to {signal.Signals(signum).name}")
+        scheduler.shutdown()
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGSTOP, signal_handler)
 
     logger.info("Finished Startup")
     try:

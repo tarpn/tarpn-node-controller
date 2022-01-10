@@ -12,7 +12,7 @@ from tarpn.log import LoggingMixin
 from tarpn.network import QoS
 from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.header import ControlHeader, ControlType, NetworkHeader, Protocol
-from tarpn.util import secure_random_byte
+from tarpn.util import secure_random_byte, secure_random_data
 
 
 @dataclasses.dataclass
@@ -41,8 +41,8 @@ class PingProtocol(LoggingMixin):
         self.stats: Dict[MeshAddress, PingStats] = defaultdict(PingStats)
         LoggingMixin.__init__(self)
 
-    def send_ping(self, node: MeshAddress) -> int:
-        ctrl = ControlHeader(True, ControlType.PING, 1, bytes([secure_random_byte()]))
+    def send_ping(self, node: MeshAddress, size: int = 1) -> int:
+        ctrl = ControlHeader(True, ControlType.PING, size, secure_random_data(size))
         network_header = NetworkHeader(
             version=0,
             qos=QoS.Higher,
@@ -59,7 +59,7 @@ class PingProtocol(LoggingMixin):
         stream.seek(0)
         buffer = stream.read()
         self.stats[node].results.append(
-            PingResult(ctrl.extra[0], time.time_ns(), None, threading.Condition(self.mutex)))
+            PingResult(ctrl.extra[0], time.time_ns(), None, threading.Condition()))
         self.network.send(network_header, buffer)
         return ctrl.extra[0]
 
@@ -81,6 +81,7 @@ class PingProtocol(LoggingMixin):
             now = time.time_ns()
             result = self.stats.get(network_header.source).get(ctrl.extra[0])
             if result is not None:
+                self.debug(f"Got ping response {ctrl}")
                 result.end_ns = now
                 with result.cond:
                     result.cond.notify_all()
@@ -95,7 +96,7 @@ class PingProtocol(LoggingMixin):
                 if done:
                     return result
                 else:
-                    self.warning(f"Timed out waiting for ping {seq} from {node}")
+                    self.warning(f"Timed out waiting for ping {seq} from {node} after {timeout_ms}ms")
                     return None
         else:
             self.warning(f"No ping from {node} found with seq {seq}")
