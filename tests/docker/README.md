@@ -8,13 +8,13 @@ Define a network as done in docker-compose.yml, run it
 
 > docker-compose -f tests/docker/docker-compose.yml up
 
-Connect to one of the nodes using a domain socket
+In a separate shell, run this docker-compose to simulate slow links 
 
-> docker run -i -t -v /tmp/socks/:/tmp/socks/ tarpn/tarpn-core:latest nc -U /tmp/socks/tarpn-shell-david.sock 
+> docker-compose -f tests/docker/docker-compose-add-latency.yml up
 
-Inject some network errors using Pumba
+Now, connect to the unix socket with curl from (yet another) docker container to inspect a node
 
-> docker run -it --rm  -v /var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba --interval=5m --log-level=info netem --duration 100s loss -p 100 tarpn-node-controller_david_1
+> docker run -v /tmp/socks:/tmp/socks tarpn/tarpn-test:latest curl --unix-socket /tmp/socks/tarpn-shell-alice.sock "http://dummy/metrics"
 
-
-dig +short bob
+The reason for running curl within a container is that there are some issues with a Mac host and linux Docker container
+sharing a domain socket. Not sure if it's curl or the socket itself.
