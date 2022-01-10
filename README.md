@@ -10,10 +10,16 @@ Pure Python implementation of a TNC (Terminal Node Controller).
 
 ## System Requirements
 
-On Linux (including Raspbian) install Python 3.7, pip, and virtualenv
+On Linux (including Raspbian) ensure at least Python 3.7 is installed.
 
 ```shell
-sudo apt-get install python3.7 python3-pip
+python3 --version
+```
+
+Next, install pip, and virtualenv
+
+```shell
+sudo apt-get install python3-pip
 pip3 install virtualenv
 ```
 
