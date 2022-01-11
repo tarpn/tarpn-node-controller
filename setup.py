@@ -29,6 +29,7 @@ EXTRA_REQUIRES = dict(
 
         # Build
         'setuptools_scm>=6.2',
+        'importlib-metadata',
         'wheel'
     ]
 )
