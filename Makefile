@@ -11,7 +11,7 @@ deps:
 
 .PHONY: dist
 dist:
-	./venv/bin/python setup.py egg_info --tag-build "dev+git.$$(git rev-parse --short HEAD)" sdist; 
+	./venv/bin/python setup.py egg_info sdist; 
 	./venv/bin/pip wheel --no-index --no-deps --wheel-dir dist dist/*.tar.gz
 	ls dist
 

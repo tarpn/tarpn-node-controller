@@ -25,12 +25,17 @@ EXTRA_REQUIRES = dict(
 
         # Testing
         'pytest==6.0.1',
-        'pytest-runner==5.2'
+        'pytest-runner==5.2',
+
+        # Build
+        'setuptools_scm>=6.2',
+        'wheel'
     ]
 )
 setup(
     name='tarpn-core',
-    version='0.1.4',
+    use_scm_version=True,
+    setup_requires=['setuptools_scm'],
     packages=find_packages(exclude=["tests", "tests.*"]),
     data_files=[
         ("config", ["config/defaults.ini", "config/node.ini.sample", "config/logging.ini"])
@@ -52,6 +57,7 @@ setup(
                  'tarpn-app = tarpn.app.runner:main'
              ]},
     python_requires='>=3.7',
+
     install_requires=[
         'hexdump==3.3',
         'pyserial==3.4',
