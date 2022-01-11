@@ -10,10 +10,16 @@ Pure Python implementation of a TNC (Terminal Node Controller).
 
 ## System Requirements
 
-On Linux (including Raspbian) install Python 3.7, pip, and virtualenv
+On Linux (including Raspbian) ensure at least Python 3.7 is installed.
 
 ```shell
-sudo apt-get install python3.7 python3-pip
+python3 --version
+```
+
+Next, install pip, and virtualenv
+
+```shell
+sudo apt-get install python3-pip
 pip3 install virtualenv
 ```
 
@@ -51,16 +57,16 @@ A sample config file is included at `/opt/tarpn-core/config/node.ini.sample`. Ma
 cp /opt/tarpn-core/config/node.ini.sample /opt/tarpn-core/config/node.ini
 ```
 
-Edit this file and, at a minimum, set `mycall`, `node.alias`, and `node.locator`.
+Edit this file and, at a minimum, set `mycall`, `node.alias`, `node.locator`, and `host.name`
 
 One or more ports should also be configured. An example `[port:1]` is included.
 
-The `mesh.address` must be coordinated within your network to be unique.
+The `mesh.address` and `host.name` must be coordinated within your network to be unique.
 
 node.ini.sample:
 ```ini
 [default]
-mycall = N0CALL         ; Your callsign
+mycall = N0CALL         ; Your call sign
 
 [node]
 node.alias = MyNode     ; A name for your node
@@ -75,7 +81,8 @@ serial.device = /dev/ttyUSB0
 serial.speed = 57600
 
 [network]
-mesh.address = 00.aa
+mesh.address = 00.aa    ; A unique address for this node on the network
+host.name = default     ; A unique name for this node on the network
 ```
 
 ## Systemd service (optional)
