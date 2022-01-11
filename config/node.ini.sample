@@ -15,4 +15,4 @@ serial.speed = 57600
 
 [network]
 mesh.address = 00.aa    ; A unique address for this node on the network
-host.name = default     ; A unique name for this node on the network
+host.name = mynode      ; A unique name for this node on the network
