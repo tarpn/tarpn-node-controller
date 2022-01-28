@@ -90,9 +90,8 @@ host.name = default     ; A unique name for this node on the network
 Install the systemd service file. This assumes that you've configured tarpn-node
 
 ```shell
-wget https://raw.githubusercontent.com/tarpn/tarpn-node-controller/scripts/tarpn-core.service
+wget https://raw.githubusercontent.com/tarpn/tarpn-node-controller/main/scripts/tarpn-core.service
 sudo mv tarpn-core.service /etc/systemd/system/tarpn-core.service
-sudo systemctl reload-daemon
 sudo systemctl enable tarpn-core
 sudo systemctl start tarpn-core
 ```
