@@ -23,7 +23,8 @@ _default_settings = {
 
 _default_port_settings = {
     "port.enabled": True,
-    "serial.timeout": 0.100
+    "serial.timeout": 0.100,
+    "serial.duplex": True
 }
 
 
@@ -36,81 +37,6 @@ def _default_basedir(app_name):
         return os.path.join(os.environ["APPDATA"], app_name)
     else:
         return os.path.expanduser(os.path.join("~", "." + app_name.lower()))
-
-
-class Settings:
-    def __init__(self, basedir: str = None, paths: List[str] = None, defaults: Dict = None):
-        self._init_basedir(basedir)
-        self._configfiles = [os.path.join(self._basedir, path) for path in paths]
-        self._config: Optional[configparser.ConfigParser] = None
-        if defaults is None:
-            self._defaults = dict()
-        else:
-            self._defaults = defaults
-        self.load()
-
-    def _init_basedir(self, basedir):
-        if basedir is not None:
-            self._basedir = basedir
-        else:
-            self._basedir = _default_basedir("TARPN")
-
-        if not os.path.isdir(self._basedir):
-            try:
-                os.makedirs(self._basedir)
-            except Exception:
-                print(f"Could not create base folder at {self._basedir}. This is a fatal error, TARPN "
-                      "cannot run without a writable base folder.")
-                raise
-
-    def load(self):
-        self._config = configparser.ConfigParser(defaults=self._defaults,
-                                                 interpolation=configparser.ExtendedInterpolation(),
-                                                 inline_comment_prefixes=";",
-                                                 default_section="default")
-        self._config.read_dict(_default_settings)
-        for path in self._configfiles:
-            if os.path.exists(path):
-                self._config.read(path)
-            else:
-                raise RuntimeError(f"No such config file {path}")
-
-    def save(self):
-        # self._config.write()
-        return
-
-    def node_config(self):
-        return NodeConfig(self._config["node"])
-
-    def port_configs(self):
-        ports = []
-        for section in self._config.sections():
-            m = re.match(r"port:(\d+)", section)
-            if m:
-                ports.append(int(m.group(1)))
-        port_configs = []
-        for port in ports:
-            port_sect = self._config[f"port:{port}"]
-            port_configs.append(PortConfig.from_dict(port, port_sect))
-        return port_configs
-
-    def network_configs(self):
-        return NetworkConfig(self._config["network"])
-
-    def app_configs(self):
-        apps = []
-        for section in self._config.sections():
-            m = re.match(r"app:(\w[\w\d]*)", section)
-            if m:
-                apps.append(m.group(1))
-        app_configs = []
-        for app in apps:
-            app_sect = self._config[f"app:{app}"]
-            app_configs.append(AppConfig.from_dict(app, app_sect))
-        return app_configs
-
-    def config_section(self, name):
-        return Config(name, self._config[name])
 
 
 class Config(Mapping):
@@ -187,14 +113,17 @@ class NodeConfig(Config):
 
 
 class PortConfig(Config):
-    def __init__(self, port_id, port_config):
+    def __init__(self, port_id: int, port_config):
         super().__init__(f"port:{port_id}", port_config)
         self._port_id = port_id
 
-    def port_id(self):
+    def port_id(self) -> int:
         return self._port_id
 
-    def port_type(self):
+    def port_name(self) -> str:
+        return super().get("port.name", f"port-{self._port_id}")
+
+    def port_type(self) -> str:
         return super().get("port.type")
 
     @classmethod
@@ -264,3 +193,78 @@ class AppConfig(Config):
         parser.read_dict({f"app:{app_name}": configs})
         config = parser[f"app:{app_name}"]
         return cls(app_name, config)
+
+
+class Settings:
+    def __init__(self, basedir: str = None, paths: List[str] = None, defaults: Dict = None):
+        self._init_basedir(basedir)
+        self._configfiles = [os.path.join(self._basedir, path) for path in paths]
+        self._config: Optional[configparser.ConfigParser] = None
+        if defaults is None:
+            self._defaults = dict()
+        else:
+            self._defaults = defaults
+        self.load()
+
+    def _init_basedir(self, basedir):
+        if basedir is not None:
+            self._basedir = basedir
+        else:
+            self._basedir = _default_basedir("TARPN")
+
+        if not os.path.isdir(self._basedir):
+            try:
+                os.makedirs(self._basedir)
+            except Exception:
+                print(f"Could not create base folder at {self._basedir}. This is a fatal error, TARPN "
+                      "cannot run without a writable base folder.")
+                raise
+
+    def load(self):
+        self._config = configparser.ConfigParser(defaults=self._defaults,
+                                                 interpolation=configparser.ExtendedInterpolation(),
+                                                 inline_comment_prefixes=";",
+                                                 default_section="default")
+        self._config.read_dict(_default_settings)
+        for path in self._configfiles:
+            if os.path.exists(path):
+                self._config.read(path)
+            else:
+                raise RuntimeError(f"No such config file {path}")
+
+    def save(self):
+        # self._config.write()
+        return
+
+    def node_config(self):
+        return NodeConfig(self._config["node"])
+
+    def port_configs(self) -> Dict[int, PortConfig]:
+        ports = []
+        for section in self._config.sections():
+            m = re.match(r"port:(\d+)", section)
+            if m:
+                ports.append(int(m.group(1)))
+        port_configs = {}
+        for port in ports:
+            port_sect = self._config[f"port:{port}"]
+            port_configs[port] = PortConfig.from_dict(port, port_sect)
+        return port_configs
+
+    def network_configs(self):
+        return NetworkConfig(self._config["network"])
+
+    def app_configs(self):
+        apps = []
+        for section in self._config.sections():
+            m = re.match(r"app:(\w[\w\d]*)", section)
+            if m:
+                apps.append(m.group(1))
+        app_configs = []
+        for app in apps:
+            app_sect = self._config[f"app:{app}"]
+            app_configs.append(AppConfig.from_dict(app, app_sect))
+        return app_configs
+
+    def config_section(self, name):
+        return Config(name, self._config[name])

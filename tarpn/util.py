@@ -434,3 +434,7 @@ def lollipop_compare(old_epoch: int, new_epoch: int) -> int:
 
 def secure_random_byte() -> int:
     return struct.unpack('<B', secrets.token_bytes(1))[0]
+
+
+def secure_random_data(size: int) -> bytes:
+    return secrets.token_bytes(size)

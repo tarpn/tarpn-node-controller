@@ -9,26 +9,36 @@ import serial
 
 from tarpn.io import IOProtocol
 from tarpn.log import LoggingMixin
+from tarpn.metrics import MetricsMixin
 from tarpn.scheduler import Scheduler, CloseableThreadLoop
 from tarpn.util import CountDownLatch, BackoffGenerator
 
 
+class DummyLock:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, _type, value, traceback):
+        pass
+
+
 class SerialLoop(CloseableThreadLoop, ABC):
     def __init__(self, name: str, ser: serial.Serial, protocol: IOProtocol,
-                 open_event: threading.Event, error_event: threading.Event, closed_latch: CountDownLatch):
+                 open_event: threading.Event, error_event: threading.Event, closed_latch: CountDownLatch, lock: threading.Lock):
         super().__init__(name=name)
         self.ser = ser
         self.protocol = protocol
         self.open_event = open_event
         self.error_event = error_event
         self.closed_latch = closed_latch
+        self.lock = lock
 
     def close(self):
         super().close()
         self.closed_latch.countdown()
 
 
-class SerialReadLoop(SerialLoop, LoggingMixin):
+class SerialReadLoop(SerialLoop, LoggingMixin, MetricsMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         LoggingMixin.__init__(self,
@@ -38,16 +48,19 @@ class SerialReadLoop(SerialLoop, LoggingMixin):
     def iter_loop(self):
         if self.open_event.wait(3.0):
             try:
-                data = self.ser.read(1024)
-                if len(data) > 0:
-                    self.debug(f"Read {len(data)} bytes: {data}")
-                    self.protocol.handle_bytes(data)
+                with self.lock:
+                    data = self.ser.read(1024)
+                    if len(data) > 0:
+                        self.debug(f"Read {len(data)} bytes: {data}")
+                        self.meter("bytes", "in").mark(len(data))  # TODO add port number
+                        self.protocol.handle_bytes(data)
             except serial.SerialException:
                 self.exception("Failed to read bytes from serial device")
+                self.meter("error").mark()
                 self.error_event.set()
 
 
-class SerialWriteLoop(SerialLoop, LoggingMixin):
+class SerialWriteLoop(SerialLoop, LoggingMixin, MetricsMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         LoggingMixin.__init__(self,
@@ -64,26 +77,31 @@ class SerialWriteLoop(SerialLoop, LoggingMixin):
                 to_write = self.protocol.next_bytes_to_write()
             if to_write is not None and len(to_write) > 0:
                 try:
-                    self.ser.write(to_write)
-                    self.ser.flush()
-                    self.debug(f"Wrote {len(to_write)} bytes: {to_write}")
-                    self.retry_backoff.reset()
+                    with self.lock:
+                        self.ser.write(to_write)
+                        self.ser.flush()
+                        self.meter("bytes", "out").mark(len(to_write))  # TODO add port number
+                        self.debug(f"Wrote {len(to_write)} bytes: {to_write}")
+                        self.retry_backoff.reset()
                 except serial.SerialTimeoutException as e:
                     self.unsent.append(to_write)
                     t = next(self.retry_backoff)
                     self.exception(f"Failed to write bytes to serial device, serial timed out. Retrying after {t}s.", e)
+                    self.meter("timeout").mark()
                     sleep(t)
                 except serial.SerialException as e:
                     self.exception("Failed to write bytes to serial device", e)
+                    self.meter("error").mark()
                     self.error_event.set()
 
 
-class SerialDevice(CloseableThreadLoop, LoggingMixin):
+class SerialDevice(CloseableThreadLoop, LoggingMixin, MetricsMixin):
     def __init__(self,
                  protocol: IOProtocol,
                  device_name: str,
                  speed: int,
                  timeout: float,
+                 duplex: bool,
                  scheduler: Scheduler):
         LoggingMixin.__init__(self)
         CloseableThreadLoop.__init__(self, f"Serial Device {device_name}")
@@ -94,14 +112,18 @@ class SerialDevice(CloseableThreadLoop, LoggingMixin):
         self._ser = serial.Serial(port=None, baudrate=speed, timeout=timeout, write_timeout=timeout)
         self._ser.port = device_name
         self._closed_latch = CountDownLatch(2)
+        if not duplex:
+            self._duplex_lock = threading.Lock()
+        else:
+            self._duplex_lock = DummyLock()
         self._open_event = threading.Event()
         self._error_event = threading.Event()
         self._open_backoff = BackoffGenerator(0.100, 1.2, 5.000)
         # Submit the reader and writer threads first, so they will be shutdown first
         self._scheduler.submit(SerialReadLoop(f"Serial Reader {self._ser.name}", self._ser,
-                                              self._protocol, self._open_event, self._error_event, self._closed_latch))
+                                              self._protocol, self._open_event, self._error_event, self._closed_latch, self._duplex_lock))
         self._scheduler.submit(SerialWriteLoop(f"Serial Writer {self._ser.name}", self._ser,
-                                               self._protocol, self._open_event, self._error_event, self._closed_latch))
+                                               self._protocol, self._open_event, self._error_event, self._closed_latch, self._duplex_lock))
         self._scheduler.submit(self)
 
     def close(self) -> None:
@@ -132,6 +154,7 @@ class SerialDevice(CloseableThreadLoop, LoggingMixin):
             try:
                 self._ser.open()
                 self.info(f"Opened serial port {self._device_name}")
+                # TODO metrics
                 self._open_event.set()
                 self._open_backoff.reset()
             except serial.SerialException as err:

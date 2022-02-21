@@ -1,0 +1,14 @@
+services:
+  tc:
+    image: tarpn/tarpn-test:latest
+    environment:
+      - DURATION=300
+      #- LOSS=5
+      - DELAY=100
+      - CONTAINERS=alice bob carol dave eve
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /tmp/socks/:/tmp/socks/
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: /opt/tarpn/bin/tc.sh

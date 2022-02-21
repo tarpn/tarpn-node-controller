@@ -1,0 +1,10 @@
+services:
+  test:
+    container_name: test
+    depends_on:
+      alice:
+        condition: service_healthy
+    image: tarpn/tarpn-test:latest
+    volumes:
+      - /tmp/socks/:/tmp/socks/
+    command: /opt/tarpn/bin/pytest /opt/tarpn/tests/test_curl.py

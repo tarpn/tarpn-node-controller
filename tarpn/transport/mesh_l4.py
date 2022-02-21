@@ -6,7 +6,7 @@ from tarpn.crc import crc_b
 from tarpn.log import LoggingMixin
 from tarpn.network import L3Protocol, L3Address
 from tarpn.network.mesh import MeshAddress
-from tarpn.network.mesh.header import DatagramHeader, Datagram, BroadcastHeader
+from tarpn.network.mesh.header import DatagramHeader, Datagram
 from tarpn.transport.mesh.broadcast import BroadcastProtocol
 from tarpn.transport.mesh.datagram import DatagramProtocol
 from tarpn.transport import DatagramProtocol as DProtocol
@@ -107,8 +107,8 @@ class DatagramTransport(DTransport):
 
 class BroadcastTransport(BTransport):
     """
-        A channel for sending and receiving datagrams
-        """
+    A channel for broadcasting datagrams
+    """
 
     def __init__(self,
                  network: L3Protocol,
@@ -133,6 +133,7 @@ class BroadcastTransport(BTransport):
         self.closing = True
 
     def write(self, data: Any) -> None:
+        # Route only for the purposes of getting the MTU
         _, mtu = self.network.route_packet(MeshAddress.parse("ff.ff"))
         if isinstance(data, str):
             encoded_data = data.encode("utf-8")
@@ -188,7 +189,10 @@ class MeshTransportManager(L4Protocol, LoggingMixin):
         return protocol
 
     def broadcast(self, protocol_factory: Callable[[], DProtocol],
-                local_address: MeshAddress, port: int) -> DProtocol:
+                  local_address: MeshAddress, port: int) -> DProtocol:
+        """
+        Create a broadcast transport for a given local address and port
+        """
         if port in self.connections:
             if self.connections[port][0].is_closing():
                 del self.connections[port]
@@ -196,7 +200,7 @@ class MeshTransportManager(L4Protocol, LoggingMixin):
                 raise RuntimeError(f"Connection to {port} is already open")
         protocol = protocol_factory()
         transport = BroadcastTransport(self.l3_protocol, self.broadcast_protocol, self.datagram_protocol, port,
-                                        local_address, MeshAddress.parse("ff.ff"))
+                                       local_address, MeshAddress.parse("ff.ff"))
         protocol.connection_made(transport)
         self.connections[port] = (transport, protocol)
         return protocol

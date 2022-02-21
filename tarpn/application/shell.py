@@ -8,9 +8,9 @@ from cmd2 import ansi, Cmd2ArgumentParser, with_argparser, Cmd2ArgparseError
 
 from tarpn.network.mesh import MeshAddress
 from tarpn.network.mesh.protocol import MeshProtocol
+from tarpn.transport import DatagramProtocol as DProtocol
 from tarpn.transport import Protocol, Transport, L4Address
 from tarpn.transport.mesh_l4 import MeshTransportManager
-from tarpn.transport import DatagramProtocol as DProtocol
 
 
 class ShellDatagramProtocol(DProtocol):
