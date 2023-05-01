@@ -4,4 +4,4 @@ pyserial==3.4
 pyserial-asyncio==0.4
 msgpack==1.0.0
 pyformance==0.4
-Flask==1.1.2
+Flask==2.3.2
