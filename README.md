@@ -4,7 +4,9 @@
 
 [![build](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml/badge.svg)](https://github.com/tarpn/tarpn-node-controller/actions/workflows/build.yml)
 
-Pure Python implementation of a TNC (Terminal Node Controller).
+⚠️ Please Note! ⚠️ This project does not contain the software stack used in TARPN deployments. 
+It is an experimental networking stack that may one day find some use in the field. Please refer 
+to the official TARPN documentation https://tarpn.net. 
 
 # Installation
 
